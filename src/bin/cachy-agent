@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# cachy-agent - Omarchy omarchy-agent'in CachyOS/KDE karşılığı
+set -euo pipefail
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cachy-agent"
+DEFAULT_FILE="$CONFIG_DIR/default-agent"
+WORKDIR="$HOME/Projeler"
+
+default_agent() { [[ -f "$DEFAULT_FILE" ]] && cat "$DEFAULT_FILE" || echo "opencode"; }
+
+KNOWN_AGENTS="opencode agy claude codex crush copilot cursor-agent grok"
+
+run_agent() {
+  local agent="$1"; shift || true
+  if [[ "$PWD" == "$HOME" && -d "$WORKDIR" ]]; then cd "$WORKDIR"; fi
+  case "$agent" in
+    opencode)
+      if [[ $# -gt 0 ]]; then exec opencode --auto --prompt "$*"; else exec opencode --auto; fi
+      ;;
+    agy)
+      if agy --help 2>&1 | grep -q "dangerously-skip-permissions"; then
+        if [[ $# -gt 0 ]]; then exec agy --dangerously-skip-permissions --effort low --prompt "$*"; else exec agy --dangerously-skip-permissions; fi
+      else
+        if [[ $# -gt 0 ]]; then exec agy --prompt "$*"; else exec agy; fi
+      fi
+      ;;
+    claude)
+      if [[ $# -gt 0 ]]; then exec claude --permission-mode auto -p "$*"; else exec claude --permission-mode auto; fi
+      ;;
+    codex)
+      if [[ $# -gt 0 ]]; then exec codex --approve-for-me "$*"; else exec codex --approve-for-me; fi
+      ;;
+    crush)
+      if [[ $# -gt 0 ]]; then exec crush --yolo "$*"; else exec crush --yolo; fi
+      ;;
+    copilot)
+      if [[ $# -gt 0 ]]; then exec copilot --allow-all "$*"; else exec copilot --allow-all; fi
+      ;;
+    cursor-agent)
+      if [[ $# -gt 0 ]]; then exec cursor-agent --yolo --trust "$*"; else exec cursor-agent --yolo --trust; fi
+      ;;
+    grok)
+      if [[ $# -gt 0 ]]; then exec grok --permission-mode bypassPermissions "$*"; else exec grok --permission-mode bypassPermissions; fi
+      ;;
+    *) echo "bilinmeyen agent: $agent ($KNOWN_AGENTS)" >&2; exit 1 ;;
+  esac
+}
+
+cmd="${1:---pick}"
+case "$cmd" in
+  --inline)
+    shift || true
+    # ga-style: --inline agy ikinci argüman olabilir, sonrası prompt
+    ag="${1:-$(default_agent)}"; shift || true
+    run_agent "$ag" "$@"
+    ;;
+  --pick)
+    sel="${2:-$(default_agent)}"
+    if [[ "$sel" == "$(default_agent)" && -z "${2:-}" ]]; then
+      echo "agent seç ($KNOWN_AGENTS) [$(default_agent)]: "; read -r sel; sel="${sel:-$(default_agent)}"
+    fi
+    case "$sel" in opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ;; *) echo "bilinmeyen agent: $sel ($KNOWN_AGENTS)" >&2; exit 1 ;; esac
+    if [[ "${CACHY_AGENT_TERMINAL:-0}" == "1" ]]; then
+      exec alacritty --class CachyAgent -e bash -c '"$0" --inline "$1"; exec fish' "$0" "$sel"
+    fi
+    run_agent "$sel"
+    ;;
+  --seed)
+    # interaktif session + başlangıç bağlamı (crash devamı için)
+    shift || true
+    ag="$(default_agent)"
+    case "${1:-}" in opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ag="$1"; shift || true ;; esac
+    if [[ -z "${*:-}" ]]; then exec cachy-agent --inline "$ag"; fi
+    case "$ag" in
+      agy) exec agy --dangerously-skip-permissions --effort low --prompt-interactive "$*" ;;
+      opencode) exec opencode --auto --prompt "$*" ;;
+      claude) exec claude --permission-mode auto "$*" ;;
+    codex|crush|copilot|cursor-agent|grok) exec "$ag" "$*" ;;
+      *) echo "bilinmeyen agent: $ag ($KNOWN_AGENTS)" >&2; exit 1 ;;
+    esac
+    ;;
+  --prompt) shift || true; if [[ -z "${*:-}" ]]; then echo "kullanım: cachy-agent --prompt <metin>" >&2; exit 1; fi; PROMPT="$*"; AGENT="$(default_agent)"; run_agent "$AGENT" "$PROMPT" ;;
+  default)
+    mkdir -p "$CONFIG_DIR"
+    if [[ -n "${2:-}" ]]; then
+      case "$2" in opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ;; *) echo "bilinmeyen agent: $2 ($KNOWN_AGENTS)" >&2; exit 1 ;; esac
+      echo "$2" > "$DEFAULT_FILE"
+    fi
+    cat "$DEFAULT_FILE"
+    ;;
+  crash)
+    shift || true
+    if [[ "${1:-}" == "mute" ]]; then
+      PROG=$(echo "${2:-}" | tr -cd 'A-Za-z0-9._-'); MODE="${3:-on}"
+      mkdir -p "$CONFIG_DIR/mute"
+      case "$MODE" in
+        on) [[ -n "$PROG" ]] && touch "$CONFIG_DIR/mute/$PROG" && echo "muted: $PROG" || { echo "kullanım: cachy-agent crash mute <program> [on|off]" >&2; exit 1; } ;;
+        off) rm -f "$CONFIG_DIR/mute/$PROG" && echo "unmuted: $PROG" ;;
+        *) echo "kullanım: cachy-agent crash mute <program> [on|off]" >&2; exit 1 ;;
+      esac
+    else
+      exec "$HOME/.local/bin/cachy-agent-crash" "$@"
+    fi
+    ;;
+  usage)
+    _udir="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage"
+    if ! ls "$_udir"/*.json >/dev/null 2>&1; then echo "kayıt yok, \`cachy-agent-usage-update\` çalıştır"; else for _f in "$_udir"/*.json; do python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); lims=",".join(f"{l.get("label",l.get("name",""))} {l.get("percent",l.get("usedPercent","?"))}%" for l in (d.get("limits") or [])) or "-"; print(f"{d.get("id","?")}: today={d.get("todayPrompts",d.get("today",0))} total={d.get("totalPrompts",d.get("total","?"))} limits[{lims}]")' "$_f"; done; fi ;; # usage-summary
+  --version|-v)
+    _vfile="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../../VERSION"
+    # repo dışı kurulumda VERSION dosyası yoksa sessizce "unknown"
+    if [[ -f "$_vfile" ]]; then cat "$_vfile"
+    elif [[ -f "$HOME/Projeler/cachy-agent/VERSION" ]]; then cat "$HOME/Projeler/cachy-agent/VERSION"
+    else echo "unknown"
+    fi
+    ;;
+  --help|-h)
+    cat <<'HELP'
+cachy-agent - agentic launcher (CachyOS/KDE)
+Kullanım:
+  cachy-agent --inline [agent] [prompt...]  Seçili agentı aç (varsayılan: default-agent)
+  cachy-agent --pick [agent]                Seçim sor (argümansız sorar)
+  cachy-agent --prompt <metin>              Default agent'a tek komut gönder
+  cachy-agent --seed [ad] <metin>           İnteraktif session + bağlamla başlat
+  cachy-agent default [ad]                  Default agentı göster/değiştir
+  cachy-agent crash mute <prog> [on|off]    Crash bildirimini sustur/aç
+  cachy-agent crash <pid> [comm]            Crash diagnose et
+  cachy-agent usage                         Kullanım kayıtları
+Agentlar: opencode agy claude codex crush copilot cursor-agent grok
+Kısayollar: a (default), ga (agy), SUPER+SHIFT+CTRL+A (menü)
+HELP
+    ;;
+  *) shift || true; run_agent "$(default_agent)" "$@" ;;
+esac

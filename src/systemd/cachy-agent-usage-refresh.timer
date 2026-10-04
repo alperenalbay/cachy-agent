@@ -1,0 +1,10 @@
+[Unit]
+Description=cachyAgent usage refresh every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+Unit=cachy-agent-usage-refresh.service
+
+[Install]
+WantedBy=timers.target

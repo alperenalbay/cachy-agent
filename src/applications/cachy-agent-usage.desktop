@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=cachyAgent Kullanim
+Comment=kota panosu
+Exec=/usr/bin/alacritty --class CachyAgentUsage -e __HOME__/.local/bin/cachy-agent-usage-panel
+Icon=office-chart-line
+Terminal=false
+Categories=Utility;

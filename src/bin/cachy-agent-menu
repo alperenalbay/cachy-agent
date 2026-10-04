@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# cachy-agent-menu - fuzzel picker -> alacritty agent terminal
+# fuzzel yoksa eski metin prompt'a düşer (kısayol hep çalışır)
+set -euo pipefail
+AGENT_BIN="$HOME/.local/bin/cachy-agent"
+if command -v fuzzel >/dev/null 2>&1; then
+  installed=()
+  missing=()
+  for a in opencode agy claude codex crush copilot cursor-agent grok; do
+    if command -v "$a" >/dev/null 2>&1; then installed+=("$a"); else missing+=("$a"); fi
+  done
+  [[ ${#installed[@]} -eq 0 && ${#missing[@]} -eq 0 ]] && exit 0
+  list=$(printf '%s\n' "${installed[@]}")
+  if [[ ${#installed[@]} -gt 0 ]]; then
+    list+=$'\n──────────────────'
+    for a in "${installed[@]}"; do list+=$'\n★ '"$a"' (varsayılan yap)'; done
+  fi
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    list+=$'\n──────────────────'
+    for m in "${missing[@]}"; do list+=$'\n+ '"$m"' (kur)'; done
+  fi
+  sel=$(printf '%s\n' "$list" | fuzzel --dmenu --prompt 'Agent: ' 2>/dev/null || true)
+  [[ -z "${sel:-}" ]] && exit 0
+  case "$sel" in
+    ─*) exit 0 ;;
+    "★ "*)
+      name=$(echo "$sel" | sed 's/^★ //; s/ (varsayılan yap)$//')
+      case "$name" in opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ;; *) exit 0 ;; esac
+      "$HOME/.local/bin/cachy-agent" default "$name" >/dev/null
+      if command -v notify-send >/dev/null 2>&1; then notify-send "cachyAgent" "Varsayılan agent: $name"; fi
+      exit 0
+      ;;
+    "+ "*)
+      name=$(echo "$sel" | sed 's/^+ //; s/ (kur)$//')
+      case "$name" in opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ;; *) exit 0 ;; esac
+      exec /usr/bin/alacritty --class CachyAgent -e "$HOME/.local/bin/cachy-agent-install" "$name"
+      ;;
+    opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ;;
+    *) exit 0 ;;
+  esac
+  exec /usr/bin/alacritty --class CachyAgent -e "$AGENT_BIN-open" "$sel"
+else
+  exec /usr/bin/alacritty --class CachyAgent -e "$AGENT_BIN" --pick
+fi

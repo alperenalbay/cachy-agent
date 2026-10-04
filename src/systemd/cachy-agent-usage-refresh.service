@@ -1,0 +1,10 @@
+[Unit]
+Description=cachyAgent usage refresh (update then alarm)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/cachy-agent-usage-update
+ExecStart=%h/.local/bin/cachy-agent-usage-alarm
+
+[Install]
+WantedBy=default.target

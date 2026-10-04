@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# cachy-agent-usage-oneline - tek satır kompakt kullanım özeti
+# Kaynak: ~/.local/state/cachy-agent/agents/usage/*.json
+# Format (örnek): opencode:74 • codex:0% (18 Eki) • copilot:-
+#   - ready=false ise            -> <id>:-
+#   - limiti varsa (ready ise)    -> <id>:<pct>% (<gün> <ay>) [birden fazla limit "/" ile]
+#   - limit yoksa (ready ise)     -> <id>:<todayPrompts>
+#   - JSON yok/bozuk atlanır; hiç kayıt yoksa "kayıt yok" basar.
+# Reset tarihi Türkçe kısa ay adıyla yazılır (18 Eki).
+set -u
+USAGE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage"
+python3 - "$USAGE_DIR" <<'PY'
+import glob
+import json
+import os
+import re
+import sys
+from datetime import datetime
+
+usage_dir = sys.argv[1] if len(sys.argv) > 1 else ""
+MONTHS_TR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz",
+             "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"]
+
+
+def short_reset(s):
+    if not s:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        return f"{dt.day} {MONTHS_TR[dt.month - 1]}"
+    except Exception:
+        pass
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(s))
+    if m:
+        try:
+            mo, d = int(m.group(2)), int(m.group(3))
+            if 1 <= mo <= 12:
+                return f"{d} {MONTHS_TR[mo - 1]}"
+        except Exception:
+            pass
+    return ""
+
+
+parts = []
+try:
+    files = sorted(glob.glob(os.path.join(usage_dir, "*.json")))
+except Exception:
+    files = []
+
+for fp in files:
+    try:
+        with open(fp, encoding="utf-8") as f:
+            d = json.load(f)
+        aid = str(d.get("id") or os.path.splitext(os.path.basename(fp))[0])
+        if not d.get("ready", True):
+            parts.append(f"{aid}:-")
+            continue
+        shown = []
+        for lim in (d.get("limits") or []):
+            try:
+                if not isinstance(lim, dict) or lim.get("percent") is None:
+                    continue
+                p = float(lim["percent"])
+                if p > 1.0:  # yüzde verilmişse orana çevir
+                    p = p / 100.0
+                pct = int(round(p * 100))
+                rs = short_reset(lim.get("resetsAt"))
+                shown.append(f"{pct}% ({rs})" if rs else f"{pct}%")
+            except Exception:
+                continue
+        if shown:
+            parts.append(f"{aid}:" + "/".join(shown))
+        else:
+            t = d.get("todayPrompts")
+            if isinstance(t, bool):
+                parts.append(f"{aid}:?")
+            elif isinstance(t, (int, float)):
+                parts.append(f"{aid}:{int(t)}")
+            else:
+                parts.append(f"{aid}:?")
+    except Exception:
+        continue  # bozuk dosyayı atla
+
+print(" • ".join(parts) if parts else "kayıt yok")
+PY

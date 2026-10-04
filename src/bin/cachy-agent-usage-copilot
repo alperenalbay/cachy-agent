@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# cachy-agent-usage-copilot - Copilot kullanımını ortak şemada bas (stdout)
+# Araştırma (2026-10-03):
+#   - `copilot --help` içinde usage/quota komutu YOK (kullanım sadece
+#     interaktif oturumda /usage, /statusline, footer üzerinden görülüyor).
+#   - `~/.copilot` altında kota/limit dosyası YOK (sadece session sqlite/log).
+# Bu yüzden gerçek kota verisi okunamıyor -> dürüst stub: ready:false.
+# Uydurma veri YOK, secret YOK. Bulunursa gerçek okuma eklenebilir.
+set -euo pipefail
+TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"schemaVersion":1,"id":"copilot","name":"copilot","updatedAt":"%s","ready":false,"tierLabel":"","limits":[],"todayPrompts":0,"reason":"no CLI quota command; usage only via interactive /usage"}' "$TS"
+printf '\n'

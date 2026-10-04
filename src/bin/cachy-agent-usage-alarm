@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# cachy-agent-usage-alarm - limit eşiği (%90) ilk geçişinde bir kez Plasma bildirimi
+# Sadece mevcut JSON'ları okur (~/.local/state/cachy-agent/agents/usage/*.json);
+# cachy-agent-usage-update ÇALIŞTIRMAZ.
+# Mekanizma: eşik geçilince ~/.local/state/cachy-agent/agents/alerted-<id>-<label-slug>
+# dosyası yoksa notify-send atılır ve dosya oluşturulur (sonraki koşularda susar).
+# Yüzde eşiğin altına düşünce dosya silinir (re-arm). JSON'u okunamayan agent'ın
+# eski marker'ına dokunulmaz (kolektör hatasında yanlış re-arm olmasın).
+set -u
+USAGE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents"
+THRESHOLD="0.90"
+python3 - "$USAGE_DIR" "$STATE_DIR" "$THRESHOLD" <<'PY'
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+
+usage_dir = sys.argv[1] if len(sys.argv) > 1 else ""
+state_dir = sys.argv[2] if len(sys.argv) > 2 else ""
+try:
+    threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.90
+except Exception:
+    threshold = 0.90
+
+
+def slug(s):
+    s = (str(s) if s else "limit").lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s or "limit"
+
+
+def pct_of(p):
+    p = float(p)
+    if p > 1.0:  # yüzde verilmişse orana çevir
+        p = p / 100.0
+    return p
+
+
+seen_ids = set()
+above = set()  # (id, slug): eşik üstü limitler
+
+try:
+    files = sorted(glob.glob(os.path.join(usage_dir, "*.json")))
+except Exception:
+    files = []
+
+for fp in files:
+    try:
+        with open(fp, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        continue  # bozuk dosyayı atla
+    aid = re.sub(r"[^A-Za-z0-9_-]", "",
+                 str(d.get("id") or os.path.splitext(os.path.basename(fp))[0]))
+    if not aid:
+        continue
+    seen_ids.add(aid)
+    for lim in (d.get("limits") or []):
+        try:
+            if not isinstance(lim, dict) or lim.get("percent") is None:
+                continue
+            p = pct_of(lim["percent"])
+            label = str(lim.get("label") or "limit")
+            s = slug(label)
+            marker = os.path.join(state_dir, f"alerted-{aid}-{s}")
+            if p >= threshold:
+                above.add((aid, s))
+                if os.path.exists(marker):
+                    continue  # zaten bildirildi, sus
+                pct = int(round(p * 100))
+                reset = lim.get("resetsAt") or "bilinmiyor"
+                msg = f"{aid} {label} %{pct} doldu (reset: {reset})"
+                try:
+                    subprocess.run(
+                        ["notify-send", "-u", "critical", "cachyAgent", msg],
+                        check=False, timeout=10)
+                except Exception:
+                    pass
+                try:
+                    os.makedirs(state_dir, exist_ok=True)
+                    with open(marker, "w", encoding="utf-8") as mf:
+                        mf.write(f"{aid} {label} {pct} {reset}\n")
+                except Exception:
+                    pass
+            else:
+                try:  # eşik altına düştü -> re-arm
+                    if os.path.exists(marker):
+                        os.remove(marker)
+                except Exception:
+                    pass
+        except Exception:
+            continue
+
+# Yetim temizlik: verisi okunan agent'ın, artık eşik üstünde olmayan marker'ını sil
+# (limiti kalkan/etiket değişen durumlar). Okunamayan agent'a dokunma.
+try:
+    for aid in seen_ids:
+        prefix = f"alerted-{aid}-"
+        for fp in glob.glob(os.path.join(state_dir, prefix + "*")):
+            if (aid, os.path.basename(fp)[len(prefix):]) not in above:
+                try:
+                    os.remove(fp)
+                except Exception:
+                    pass
+except Exception:
+    pass
+PY
+exit 0

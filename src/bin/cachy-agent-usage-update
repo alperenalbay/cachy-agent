@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# cachy-agent-usage-update - kullanım kolektörleri orkestratörü
+# Kullanım: cachy-agent-usage-update [agent...]
+# Argümansız: opencode agy claude codex crush copilot cursor-agent grok. Verilirse sadece onları çalıştır.
+# Her kolektör (timeout 30) stdout JSON'u doğrulanıp
+# ~/.local/state/cachy-agent/agents/usage/<agent>.json yoluna atomik yazılır.
+# Başarısız kolektör veya kolektörü olmayan agent sessizce atlanır, exit 0 korunur.
+set -u
+BIN_DIR="$HOME/.local/bin"
+OUT_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage"
+
+if [[ $# -gt 0 ]]; then
+  AGENTS=("$@")
+else
+  AGENTS=(opencode agy claude codex crush copilot cursor-agent grok)
+fi
+
+mkdir -p "$OUT_DIR"
+
+rc=0
+for agent in "${AGENTS[@]}"; do
+  # Sadeleştir: yol traversal engelle
+  clean="$(printf '%s' "$agent" | tr -cd 'A-Za-z0-9_-')"
+  [[ -z "$clean" ]] && continue
+  collector="$BIN_DIR/cachy-agent-usage-$clean"
+  if [[ ! -x "$collector" ]]; then
+    continue
+  fi
+  out="$(timeout 30 "$collector" 2>/dev/null)" || continue
+  [[ -z "$out" ]] && continue
+  if ! printf '%s' "$out" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+    continue
+  fi
+  tmp="$OUT_DIR/$clean.json.tmp.$$"
+  printf '%s' "$out" > "$tmp"
+  mv -f "$tmp" "$OUT_DIR/$clean.json"
+done
+exit 0

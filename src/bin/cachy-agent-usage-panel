@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""cachy-agent-usage-panel - kullanim panosu (renkli terminal)."""
+import glob
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+USAGE_DIR = os.path.join(
+    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")),
+    "cachy-agent/agents/usage",
+)
+UPDATE_BIN = os.path.expanduser("~/.local/bin/cachy-agent-usage-update")
+
+RED = "\033[31m"
+YELLOW = "\033[33m"
+GREEN = "\033[32m"
+GRAY = "\033[90m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+BAR_WIDTH = 20
+
+AYLAR = ["", "Oca", "Sub", "Mar", "Nis", "May", "Haz",
+         "Tem", "Agu", "Eyl", "Eki", "Kas", "Ara"]
+
+
+def pct_of(p):
+    try:
+        p = float(p)
+    except (TypeError, ValueError):
+        return 0.0
+    if p > 1.0:  # yuzde verilmis ise orana cevir
+        p = p / 100.0
+    return max(0.0, min(1.0, p))
+
+
+def fmt_reset(iso):
+    if not iso:
+        return "?"
+    try:
+        s = str(iso).strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local = dt.astimezone()
+        return "%d %s" % (local.day, AYLAR[local.month])
+    except (ValueError, OverflowError, OSError):
+        return "?"
+
+
+def bar(ratio):
+    filled = int(round(ratio * BAR_WIDTH))
+    filled = max(0, min(BAR_WIDTH, filled))
+    return "\u2588" * filled + "\u2591" * (BAR_WIDTH - filled)
+
+
+def color_for(pct):
+    if pct >= 90:
+        return RED
+    if pct >= 70:
+        return YELLOW
+    return GREEN
+
+
+def load_records():
+    records = []
+    for path in sorted(glob.glob(os.path.join(USAGE_DIR, "*.json"))):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        records.append(data)
+    return records
+
+
+def render():
+    lines = []
+    today = datetime.now().strftime("%d %m %Y")
+    lines.append("%scachyAgent \u2022 Kullan\u0131m%s  %s%s%s" % (BOLD, RESET, GRAY, today, RESET))
+    lines.append("")
+    records = load_records()
+    if not records:
+        lines.append("%sKayit yok: henuz kullanim verisi toplanmamis.%s" % (GRAY, RESET))
+        lines.append("%s`cachy-agent-usage-update` calistirip tekrar deneyin.%s" % (GRAY, RESET))
+        return "\n".join(lines)
+    for rec in records:
+        name = str(rec.get("name") or rec.get("id") or "?")
+        if not rec.get("ready", False):
+            lines.append("\u25cf %s  %sveri yok%s" % (name, GRAY, RESET))
+            continue
+        try:
+            today_n = int(rec.get("todayPrompts") or 0)
+        except (TypeError, ValueError):
+            today_n = 0
+        try:
+            total_n = int(rec.get("totalPrompts") or 0)
+        except (TypeError, ValueError):
+            total_n = 0
+        head = "\u25cf %s  bug\u00fcn %d \u00b7 toplam %d" % (name, today_n, total_n)
+        limits = rec.get("limits") or []
+        if not limits:
+            lines.append("%s  %skota takibi yok%s" % (head, GRAY, RESET))
+            continue
+        lines.append(head)
+        for lim in limits:
+            if not isinstance(lim, dict):
+                continue
+            ratio = pct_of(lim.get("percent"))
+            pct = int(round(ratio * 100))
+            label = str(lim.get("label") or "limit")
+            c = color_for(pct)
+            lines.append("  %s [%s%s%s] %%%d \u00b7 reset %s" % (
+                label, c, bar(ratio), RESET, pct, fmt_reset(lim.get("resetsAt"))))
+    return "\n".join(lines)
+
+
+def main():
+    while True:
+        os.system("clear")
+        print(render())
+        print("")
+        print("%sr:%s yenile (cachy-agent-usage-update \u00e7al\u0131\u015ft\u0131r) %s\u2022%s %sq:%s \u00e7\u0131k" % (
+            BOLD, RESET, GRAY, RESET, BOLD, RESET))
+        try:
+            choice = input("[r/q]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("")
+            return 0
+        if choice == "r":
+            try:
+                subprocess.run([UPDATE_BIN], timeout=120)
+            except (OSError, subprocess.SubprocessError) as e:
+                print("guncelleme calistirilamadi: %s" % e)
+                try:
+                    input("devam icin Enter...")
+                except (EOFError, KeyboardInterrupt):
+                    return 0
+            continue
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

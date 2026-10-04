@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# cachy-agent-install <name> - eksik agent CLI'yi resmi yoluyla kurar
+set -euo pipefail
+NAME="${1:-}"
+case "$NAME" in
+  claude|codex|crush|copilot|cursor-agent|grok) ;;
+  *) echo "bilinmeyen agent: $NAME" >&2; exit 1 ;;
+esac
+read -rp "$NAME kurulacak (opencode/agy hariç harici kurulum). Devam? [E/h] " ans || true
+[[ "${ans:-}" =~ ^[HhnN] ]] && echo "Vazgeçildi." && exit 0
+case "$NAME" in
+  claude) npm i -g @anthropic-ai/claude-code ;;
+  codex) npm i -g @openai/codex ;;
+  crush) npm i -g @charmlabs/crush ;;
+  copilot) npm i -g @github/copilot ;;
+  cursor-agent) curl https://cursor.com/install -fsS | bash ;;
+  grok) curl -fsSL https://x.ai/cli/install.sh | bash ;;
+  *) echo "bilinmeyen agent: $NAME" >&2; exit 1 ;;
+esac
+if command -v "$NAME" >/dev/null 2>&1; then
+  echo "OK: $NAME kuruldu."
+  case "$NAME" in
+    claude) echo "Son adım: terminalde 'claude login' ile giriş yap." ;;
+    codex) echo "Son adım: terminalde 'codex login' ile giriş yap." ;;
+    copilot) echo "Son adım: terminalde 'copilot login' ile giriş yap." ;;
+    cursor-agent) echo "Son adım: terminalde 'agent login' ile giriş yap." ;;
+    grok) echo "Son adım: terminalde 'grok login' ile giriş yap." ;;
+  esac
+  exec cachy-agent --inline "$NAME"
+else
+  echo "Kurulum tamamlanamadı ($NAME bulunamadı). Çıktıdaki hataya bak." >&2
+  read -rp "Çıkmak için Enter..."
+  exit 1
+fi

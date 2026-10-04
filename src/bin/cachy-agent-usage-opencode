@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# cachy-agent-usage-opencode: opencode stats -> ortak kullanim semasi (JSON, stdout)
+# Ortak sema: {schemaVersion,id,name,updatedAt,ready,tierLabel,limits,todayPrompts,todaySessions,todayTotalTokens,totalPrompts,totalSessions}
+set -u
+
+fail() {
+  printf '{"schemaVersion":1,"id":"opencode","ready":false,"limits":[]}\n'
+  exit 0
+}
+
+command -v opencode >/dev/null 2>&1 || fail
+command -v python3 >/dev/null 2>&1 || fail
+
+ALL_JSON="$(opencode stats --all --json 2>/dev/null)" || fail
+TODAY_JSON="$(opencode stats --days 0 --json 2>/dev/null)" || fail
+[ -n "$ALL_JSON" ] && [ -n "$TODAY_JSON" ] || fail
+
+export ALL_JSON TODAY_JSON
+python3 - <<'PY' || printf '{"schemaVersion":1,"id":"opencode","ready":false,"limits":[]}\n'
+import json, os, datetime
+
+def tot_tokens(t):
+    if not isinstance(t, dict):
+        return 0
+    n = int(t.get("input") or 0) + int(t.get("output") or 0) + int(t.get("reasoning") or 0)
+    c = t.get("cache") or {}
+    if isinstance(c, dict):
+        n += int(c.get("read") or 0) + int(c.get("write") or 0)
+    return n
+
+try:
+    all_d = json.loads(os.environ["ALL_JSON"])
+    today_d = json.loads(os.environ["TODAY_JSON"])
+except Exception:
+    raise SystemExit(1)
+
+out = {
+    "schemaVersion": 1,
+    "id": "opencode",
+    "name": "opencode",
+    "updatedAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "ready": True,
+    "tierLabel": "",
+    "limits": [],
+    "todayPrompts": int(today_d.get("prompts") or 0),
+    "todaySessions": int(today_d.get("sessions") or 0),
+    "todayTotalTokens": tot_tokens(today_d.get("tokens")),
+    "totalPrompts": int(all_d.get("prompts") or 0),
+    "totalSessions": int(all_d.get("sessions") or 0),
+}
+print(json.dumps(out))
+PY

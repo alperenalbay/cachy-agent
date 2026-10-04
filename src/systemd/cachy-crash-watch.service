@@ -1,0 +1,11 @@
+[Unit]
+Description=Cachy crash watcher (agentic)
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/cachy-crash-watch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,19 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "cachyAgent"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "cachyAgent provider usage limits at a glance",
+        "EnabledByDefault": true,
+        "Icon": "cachy-agent",
+        "Id": "org.cachyagent.usage",
+        "License": "MIT",
+        "Name": "cachyAgent Usage",
+        "Version": "1.0"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

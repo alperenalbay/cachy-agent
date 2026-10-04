@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# cachy-agent-open <agent> [başlangıç-metin...] - agentı güvenli açar.
+# Metin varsa bağlamlı session (--seed), yoksa düz interaktif.
+# Hata olursa pencereyi kapatmadan sebebi + sonraki adımı gösterir.
+set -euo pipefail
+AGENT="${1:-}"; shift || true
+case "$AGENT" in opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ;; *)
+  echo "bilinmeyen agent: $AGENT" >&2; exit 1 ;;
+esac
+code=0
+if [[ $# -gt 0 ]]; then cachy-agent --seed "$AGENT" "$@" || code=$?; else cachy-agent --inline "$AGENT" || code=$?; fi
+if [[ $code -eq 0 ]]; then exit 0; fi
+case "$AGENT" in
+  claude) hint="terminalde 'claude login' ile giriş yap" ;;
+  codex) hint="terminalde 'codex login' ile giriş yap" ;;
+  copilot) hint="terminalde 'copilot login' ile giriş yap" ;;
+  cursor-agent) hint="terminalde 'agent login' ile giriş yap" ;;
+  grok) hint="terminalde 'grok login' ile giriş yap" ;;
+  *) hint="'cachy-agent --inline $AGENT' ile manuel dene" ;;
+esac
+echo
+echo "Agent açılamadı (çıkış kodu: $code)."
+echo "Sonraki adım: $hint"
+read -rp "Kapatmak için Enter..." || true
+exit "$code"

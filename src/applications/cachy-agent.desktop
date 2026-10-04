@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=cachyAgent
+Comment=Agentic launcher (opencode/agy)
+Exec=__HOME__/.local/bin/cachy-agent-menu
+Icon=cachy-agent
+Terminal=false
+Categories=Utility;
+X-KDE-GlobalAccel-CommandShortcut=true
