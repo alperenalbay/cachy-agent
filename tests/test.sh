@@ -730,6 +730,36 @@ else
   bad "13h --prefix gercek config'e dokundu" "$REAL_CONF: once=$REAL_CONF_BEFORE sonra=$REAL_CONF_AFTER"
 fi
 
+# 13i. --prefix kurulumunda systemctl CAGIRILMAZ (spec §7.1).
+# Bunu test etmenin sebebi bir "iyi olurdu" değil, somut bir kaza: uninstall
+# --prefix'in prefix'teki unit dosyalarını silerken `systemctl --user disable
+# --now` çağırması, dosyalar prefix'te olsa bile GERÇEK oturumdaki çalışan
+# servisleri sustururdu — yani `bash tests/test.sh` kullanıcının kurulumunu
+# kapatırdı. install tarafı da aynı gerekçeyle atlanır.
+#
+# Ölçüm: PATH'e `systemctl` stub'ı koyup çağrıları KAYDEDİRİZ. Test 10'daki
+# fuzzel/alacritty stub'larıyla aynı mekanizma; test.sh'te PATH'e yazılan tek
+# yer burasidir (Ruling 10 yolu sed degil, PATH'te).
+SYSSTUB="$PFXROOT/sysstub"; mkdir -p "$SYSSTUB"
+cat > "$SYSSTUB/systemctl" <<'EOF'
+#!/usr/bin/env bash
+printf 'SYSTEMCTL CALISTI: %s\n' "$*" >> "$SYSLOG"
+exit 0
+EOF
+chmod +x "$SYSSTUB/systemctl"
+export SYSLOG="$PFXROOT/sysctl.log"
+: > "$SYSLOG"
+PFX3="$PFXROOT/pfx3"
+PATH="$SYSSTUB:$PATH" bash "$REPO/install.sh" --prefix "$PFX3" </dev/null >/dev/null 2>&1
+PATH="$SYSSTUB:$PATH" bash "$REPO/uninstall.sh" --prefix "$PFX3" </dev/null >/dev/null 2>&1
+i_log="$(cat "$SYSLOG" 2>/dev/null || echo BOŞ)"
+if [[ -z "$i_log" ]]; then
+  ok "13i --prefix systemctl'i cagirmiyor (gercek servislere dokunmuyor)"
+else
+  bad "13i --prefix systemctl cagirdi" "$i_log"
+fi
+unset SYSLOG; rm -rf "$SYSSTUB" "$PFX3"
+
 # --- Task 2: argv differential (spec §8.1/§8.2) ---
 # Bu ikisi GOLDEN FILE testleridir: refactor ÖNCESİ de geçerler, çünkü mevcut
 # davranışı kilitlerler. Kırmızıya dönmeleri = davranış değişti demektir.
