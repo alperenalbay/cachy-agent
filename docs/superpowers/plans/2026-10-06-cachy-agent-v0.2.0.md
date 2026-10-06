@@ -27,6 +27,12 @@
 - **`--prefix` verilmediğinde hiçbir yol değişmez.** Mevcut davranış korunur.
 - Kod ve yorumlar Türkçedir (mevcut proje dili). Yeni script'ler de öyle.
 - Her görev bağımsız test edilebilir bir çıktı üretir ve commit ile biter.
+- **`shellcheck` her zaman `LC_ALL=C.UTF-8 LANG=C.UTF-8` ile çalıştırılır.**
+  Aksi hâlde Türkçe karakterli dosyalarda `commitBuffer: invalid argument`
+  hatası verir, hiçbir bulguyu göstermez ve kontrol sessizce geçer.
+  `shellcheck` yalnızca bash script'lerine uygulanır — `src/bin/*` glob'u
+  python3 shebang'li dosyaları (SC1071) ve `__pycache__`'i çağırır; **açık
+  dosya listesi kullan.**
 
 ## Review Focus
 
@@ -45,6 +51,13 @@ Her satır bir testle sabitlenmiştir; testin sahibi görev, adımın içindedir
 5. **Config'deki `id` PATH'te yok** (`installed: false`) → menü "Kur" gösterir,
    `external: true` ise kurulum komutu çalıştırılır. Config'e yazılan ama
    kurulmamış bir agent, menüde kurulum akışını tetiklemeli. → Task 3, adım 5
+6. **`cachy-agent crash mute <prog> on`** — `PROG` geçerli ama `touch` yetki
+   hatası verirse mevcut `A && B || C` zinciri **başarısız mute'u hata sanıp**
+   exit 1 veriyor (`cachy-agent:96`, SC2015). Sessizce susturulmuş bir agent
+   ya da yanlış hata mesajı. → Task 3, adım 0
+7. **Türkçe karakterli dosyada shellcheck** — locale ayarlanmazsa shellcheck
+   `commitBuffer: invalid argument` verir ve **hiçbir bulguyu göstermez**;
+   kontrol sessizce geçer, gerçek hatalar görünmez. → Task 6, adım 3
 
 ## File Structure
 
@@ -457,6 +470,35 @@ git commit -m "refactor: run_agent config'ten okur, davranış kilitli
 - Consumes: Task 1'in tüm sorguları (`list`, `known`, `installed`, `get`, `json`)
 - Produces: `cachy-agent-usage-update` `CACHY_AGENT_BIN_DIR` env desteği (Task 4 kullanır)
 
+- [ ] **Step 0: shellcheck uyarılarını düzelt (ölçüldü)**
+
+`shellcheck -x -f gcc` ile ölçüldü, üç uyarı var ve CI adımı bunları
+kırmızıya düşürürdü. Üçü de bu görevin dokunduğu dosyalarda:
+
+1. `src/bin/cachy-agent:63` **SC2016** — `bash -c '"$0" --inline "$1"; exec fish'
+   ...` tek tırnak kasıtlı: `$0`/`$1` iç `bash`'e geçsin diye genişletilmemeli.
+   Düzeltme değil, **belge**: satırın üstüne
+   `# shellcheck disable=SC2016  # $0/$1 ic bash'e gecmeli` ekle.
+2. `src/bin/cachy-agent:96` **SC2015** — `[[ -n "$PROG" ]] && touch … && echo …
+   || { … exit 1; }`. Bugün `PROG` boşsa hata basar (doğru), ama `touch`
+   başarısız olursa da hata basar (yanlış — `PROG` geçerli). `if/else`'e çevir.
+3. `src/bin/cachy-agent-usage-update:20` **SC2034** — `rc=0` atandı ama hiç
+   kullanılmıyor (dosya sonunda `exit 0` ile bitiyor). Bu görevde o dosyayı
+   zaten düzenliyorsun: `rc=0` satırını sil.
+
+`cachy-notify-action.py` ve `cachy-agent-usage-panel` (python3 shebang'i)
+shellcheck'e **verilmez** — SC1071 alır. CI adımı (Task 6) zaten açık dosya
+listesi kullanır; `src/bin/*` glob'unu kullanma.
+
+Doğrulama:
+
+```bash
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+shellcheck -x -f gcc src/bin/cachy-agent src/bin/cachy-agent-usage-update
+```
+
+Expected: çıktı yok, exit 0.
+
 - [ ] **Step 1: `cachy-agent-menu`'deki listeyi config'e bağla**
 
 `:9`'daki 8 isimli `for` döngüsü → `while read -r a; do ... done < <(cachy-agent-agents list)`.
@@ -841,10 +883,18 @@ jobs:
       - name: Install deps
         run: sudo apt-get update && sudo apt-get install -y shellcheck desktop-file-utils
       - name: shellcheck
+        env:
+          LC_ALL: C.UTF-8
+          LANG: C.UTF-8
         run: |
+          # Dosya listesi ACIK: src/bin/* glob'u python3 shebang'li
+          # dosyalari (SC1071) ve __pycache__'i cagirir.
+          # LC_ALL/C.UTF-8 sartsiz: Turkce karakterlerde "commitBuffer:
+          # invalid argument" hatasi verir ve bulgulari gostermez.
           shellcheck -x src/bin/cachy-agent src/bin/cachy-agent-agents \
                        src/bin/cachy-agent-menu src/bin/cachy-agent-open \
-                       src/bin/cachy-agent-install install.sh uninstall.sh
+                       src/bin/cachy-agent-install src/bin/cachy-agent-usage-update \
+                       install.sh uninstall.sh
       - name: smoke
         run: ./tests/smoke.sh
       - name: test
@@ -853,15 +903,32 @@ jobs:
         run: ./tests/argv-differential.sh --check
 ```
 
+`shellcheck` adımı **Task 3'e kadar kırmızıdır** (mevcut üç uyarı). Task 3
+Step 0 bunları düzeltir; Task 6'ya gelindiğinde yeşildir. CI dosyası Task 6'da
+eklenir, o ana kadar çalıştırılmaz.
+
 - [ ] **Step 4: CI'ı yerelde taklit et**
 
 Run: `cd /home/alperen/Projeler/cachy-agent && bash tests/smoke.sh && bash tests/test.sh && bash tests/argv-differential.sh --check`
 
 Expected: `SMOKE: GEÇTİ`, `0 kaldı`, `argv: 18 ölçüm tamam`.
 
-`shellcheck` bu makinede kurulu **değil**; CI adımı bunu atlar ama
-dosya doğru yazılmıştır. Yerelde doğrulamak için:
-`sudo pacman -S --needed shellcheck` (kullanıcı isteği — **onaysız kurulum yapma**).
+`shellcheck` 0.11.0 kuruludur. **Ölçüldü:** mevcut kodda üç uyarı var
+(SC2016, SC2015, SC2034) — Task 3 Step 0 bunları düzeltir. Task 6'ya gelindiğinde
+adım yeşil olmalıdır:
+
+```bash
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+shellcheck -x src/bin/cachy-agent src/bin/cachy-agent-agents src/bin/cachy-agent-menu \
+  src/bin/cachy-agent-open src/bin/cachy-agent-install src/bin/cachy-agent-usage-update \
+  install.sh uninstall.sh
+```
+
+Expected: çıktı yok, exit 0.
+
+`LC_ALL=C.UTF-8` **zorunludur**: shellcheck varsayılan locale'de Türkçe
+karakterlerde `commitBuffer: invalid argument` hatası verir ve hiçbir bulguyu
+göstermez — yani kontrol sessizce hiçbir şeyi doğrulamadan geçer.
 
 - [ ] **Step 5: Commit**
 
