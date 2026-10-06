@@ -6,6 +6,9 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); printf "${G}PASS${N}: %s\n" "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf "${R}FAIL${N}: %s — %s\n" "$1" "$2"; }
 
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+export PATH="$REPO/src/bin:$PATH"
+
 BIN="$HOME/.local/bin"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage"
 
@@ -100,6 +103,102 @@ if grep -q "cachy-agent-install" "$STUB_LOG" && grep -q "codex" "$STUB_LOG"; the
 FAKE_SEL="──────────────────" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
 if [[ $rc == 0 && ! -s "$STUB_LOG" ]]; then ok "10b menu ayraç yoksayılır"; else bad "10b menu ayraç" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
 rm -rf "$STUB"
+
+# 11. agents.conf parse + check
+SCRATCH=$(mktemp -d)
+# PFXROOT: sonraki görevlerin (13/14/15/16) kurulum/argv testleri kullanacak;
+# burada ayrılır, bu blokta henüz tüketilmez.
+PFXROOT=$(mktemp -d)
+trap 'rm -rf "$SCRATCH" "$PFXROOT"' EXIT
+AG="$REPO/src/bin/cachy-agent-agents"
+FIX="$REPO/tests/fixtures"
+
+# 11a: gecerli config -> list dogru sira
+export CACHY_AGENT_CONFIG="$FIX/agents-valid.conf"
+got=$("$AG" list 2>/dev/null | tr '\n' ' ')
+if [[ "$got" == "opencode agy claude codex crush copilot cursor-agent grok " ]]; then
+  ok "11a list gecerli config'ten 8 id"
+else bad "11a list" "got='$got'"; fi
+
+# 11b: check gecerli config -> exit 0
+if "$AG" check >/dev/null 2>&1; then ok "11b check gecerli config exit 0"; else bad "11b check gecerli" "exit=$?"; fi
+
+# 11c: check bozuk config -> exit 1 + stderr BOS OLMAZ
+export CACHY_AGENT_CONFIG="$FIX/agents-broken.conf"
+if ! "$AG" check >/dev/null 2>&1; then
+  err=$("$AG" check 2>&1 >/dev/null)
+  if [[ -n "$err" ]]; then ok "11c check bozuk config exit 1 + stderr"; else bad "11c check bozuk" "stderr bos"; fi
+else bad "11c check bozuk config" "exit 0 dondu, 1 bekleniyordu"; fi
+
+# 11d: bozuk config -> list exit 1 (sessiz bos liste YOK)
+if "$AG" list >/dev/null 2>&1; then bad "11d list bozuk config" "exit 0 dondu"; else ok "11d list bozuk config exit 1"; fi
+
+# 11e: eksik alan -> stderr'de satir numarasi
+err=$("$AG" check 2>&1 >/dev/null | head -1)
+if [[ "$err" == *":2:"* ]]; then ok "11e eksik alan satir numarasiyla"; else bad "11e eksik alan" "err='$err'"; fi
+
+# 11f: config dosyasi YOK -> exit 1
+export CACHY_AGENT_CONFIG="$SCRATCH/yok.conf"
+if "$AG" list >/dev/null 2>&1; then bad "11f config yok" "exit 0 dondu"; else ok "11f config yok exit 1"; fi
+
+# 11g: bilinmeyen id -> get exit 1, stdout bos
+export CACHY_AGENT_CONFIG="$FIX/agents-valid.conf"
+out=$("$AG" get uydurma flags 2>/dev/null); rc=$?
+if [[ $rc -eq 1 && -z "$out" ]]; then ok "11g bilinmeyen id exit 1 bos stdout"; else bad "11g bilinmeyen id" "rc=$rc out='$out'"; fi
+
+# 11h: known dogru calisir
+if "$AG" known codex 2>/dev/null && ! "$AG" known uydurma 2>/dev/null; then ok "11h known"; else bad "11h known" "codex veya uydurma yanlis"; fi
+
+# 11i: tum alanlar okunur
+if [[ "$("$AG" get claude prompt_flag 2>/dev/null)" == "-p" && "$("$AG" get codex prompt_flag 2>/dev/null)" == "-" ]]; then
+  ok "11i get prompt_flag"; else bad "11i get prompt_flag" "claude/codex yanlis"; fi
+
+# 11j: WORKDIR genisletilir
+wd=$("$AG" workdir 2>/dev/null)
+if [[ "$wd" == "$HOME/Projeler" ]]; then ok "11j WORKDIR ~ genisletildi"; else bad "11j WORKDIR" "wd='$wd'"; fi
+
+# --- spec §5.5 check maddeleri: HER madde ayri test ---
+# 11k: tirnakli flags reddi
+printf 'crush=Crush|-|"--yolo" -|-\n' > "$SCRATCH/tirnak.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/tirnak.conf"
+if "$AG" check >/dev/null 2>&1; then bad "11k tirnakli flags" "exit 0 dondu, 1 bekleniyordu"; else ok "11k tirnakli flags reddedildi"; fi
+
+# 11l: gecersiz prompt_flag (tire ile baslamiyor) reddi
+printf 'grok=Grok|-|x|bypassPermissions|-\n' > "$SCRATCH/pf.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/pf.conf"
+if "$AG" check >/dev/null 2>&1; then bad "11l prompt_flag bicimi" "exit 0 dondu"; else ok "11l prompt_flag bicimi dogrulandi"; fi
+
+# 11m: gecersiz id karakteri reddi
+printf 'bad id=x|y|z|w|v\n' > "$SCRATCH/id.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/id.conf"
+if "$AG" check >/dev/null 2>&1; then bad "11m id karakteri" "exit 0 dondu"; else ok "11m id karakteri dogrulandi"; fi
+
+# 11n: gecersiz install degeri (bos birakilmis, ne - ne dolu) reddi
+printf 'codex=Codex||--approve-for-me|-|x\n' > "$SCRATCH/inst.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/inst.conf"
+if "$AG" check >/dev/null 2>&1; then bad "11n install degeri" "exit 0 dondu"; else ok "11n install/login degeri dogrulandi"; fi
+
+# 11o: ikinci WORKDIR satiri reddi
+printf 'WORKDIR=/a\nWORKDIR=/b\ncodex=C|x|-|--prompt|x\n' > "$SCRATCH/wd2.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/wd2.conf"
+if "$AG" check >/dev/null 2>&1; then bad "11o coklu WORKDIR" "exit 0 dondu"; else ok "11o coklu WORKDIR reddedildi"; fi
+
+# 11p: gecersiz install icinde kacissiz | (bolme hatasi) yakalanir
+printf 'cursor-agent=cursor-agent|curl https://x/install | bash|--yolo --trust|-|y\n' > "$SCRATCH/pipe.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/pipe.conf"
+if "$AG" check >/dev/null 2>&1; then bad "11p gecessiz |" "exit 0 dondu, install 7 alana bolundu"; else ok "11p gecessiz | reddedildi"; fi
+
+# 11q: gecersiz install degeri (ne - ne dolu) reddi
+printf 'a=b|c|d|e|f\ncodex=C|x|-|--prompt|-\n' > "$SCRATCH/kesilmis.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/kesilmis.conf"
+if "$AG" check >/dev/null 2>&1; then bad "11q kesilmis metin" "exit 0 dondu"; else ok "11q kesilmis metin reddedildi"; fi
+
+# 11r: WORKDIR satiri listede GORUNMEZ (global ayar, agent degil)
+export CACHY_AGENT_CONFIG="$FIX/agents-valid.conf"
+got=$("$AG" list 2>/dev/null | tr '\n' ' ')
+if [[ "$got" != *WORKDIR* ]]; then ok "11r WORKDIR listede degil"; else bad "11r WORKDIR listeye sizdi" "got='$got'"; fi
+
+unset CACHY_AGENT_CONFIG
 
 printf '\nÖzet: %d geçti, %d kaldı (toplam %d)\n' "$PASS" "$FAIL" "$((PASS+FAIL))"
 [[ $FAIL == 0 ]]
