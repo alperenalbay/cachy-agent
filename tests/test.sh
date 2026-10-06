@@ -347,5 +347,25 @@ neg "11aj prompt_flag tirnak reddedildi" "prompt_flag içinde tırnak" "$AG" che
 
 unset CACHY_AGENT_CONFIG
 
+# --- Task 2: argv differential (spec §8.1/§8.2) ---
+# Bu ikisi GOLDEN FILE testleridir: refactor ÖNCESİ de geçerler, çünkü mevcut
+# davranışı kilitlerler. Kırmızıya dönmeleri = davranış değişti demektir.
+# Ölçüm aracı kendi PATH'ini ve CACHY_AGENT_CONFIG'ini kurar (Ruling 2);
+# test.sh'in 10. bloktan kalan PATH'ine veya unset'e bağımlı değildir.
+
+# 14. agy kosullu bayraklari — IKI dal (A: --help bayragı var, B: yok)
+# Yalnız agy ölçümlerine daraltılır. "4 ölçüm" sayısı da doğrulanır: sayı
+# yanlışsa test 0 ölçümle sessizce geçebilirdi.
+agy_out=$(bash "$REPO/tests/argv-differential.sh" --check --agent agy 2>&1); rc=$?
+if [[ $rc -eq 0 && "$agy_out" == "argv: 4 ölçüm tamam" ]]; then
+  ok "14 agy iki dal (A: bayrakli, B: çıplak)"
+else bad "14 agy iki dal" "rc=$rc out='$(printf '%s' "$agy_out" | tr '\n' ' ')'"; fi
+
+# 15. argv differential — HER ajanin argv'si baseline ile birebir ayni
+argv_out=$(bash "$REPO/tests/argv-differential.sh" --check 2>&1); rc=$?
+if [[ $rc -eq 0 && "$argv_out" == "argv: 18 ölçüm tamam" ]]; then
+  ok "15 argv differential (18 olcum)"
+else bad "15 argv differential" "rc=$rc out='$(printf '%s' "$argv_out" | tr '\n' ' ')'"; fi
+
 printf '\nÖzet: %d geçti, %d kaldı (toplam %d)\n' "$PASS" "$FAIL" "$((PASS+FAIL))"
 [[ $FAIL == 0 ]]
