@@ -609,6 +609,127 @@ if "$AG" check >/dev/null 2>&1; then ok "11al dogru agy sirasi kabul edildi"; el
 
 unset CACHY_AGENT_CONFIG
 
+# 13. install.sh --prefix / uninstall.sh --prefix
+#
+# `--prefix` bir "kurulum modu" değil, **izole kurulum** mekanizması (spec §7.1):
+# tüm yollar geçici bir dizinin altına yazılır, böylece test gerçek $HOME'e,
+# systemd-user oturumuna ve KDE cache'ine dokunmadan kurulumu deneyebilir.
+#
+# Alt dizin yapısı (plan Task 4 Step 4'te SABİTLENMİŞTİR):
+#   $PFX/bin/ · $PFX/config/cachy-agent/ · $PFX/config/fish/conf.d/
+#   $PFX/config/systemd/user/ · $PFX/config/fuzzel/ · $PFX/applications/
+#   $PFX/icons/ · $PFX/plasmoids/org.cachyagent.usage/ · $PFX/state/cachy-agent/
+#
+# DİKKAT (brifin kendi içinde çelişki var): planın Step 1'deki 13b snippet'i
+# `$PFX/fish/conf.d` ve `$PFX/systemd/user` diyordu; hemen altındaki paragraf ve
+# Step 4'ün yol haritası ikisini de `$PFX/config/...` altında sabitliyor. İki
+# kaynak `config/`'li yapıda birleşiyor, snippet tek başına kalmış — uygulama ve
+# test `config/`'li yapıyı kullanır (bkz. task-4-report.md, Sapma D1).
+#
+# `</dev/null` KALICI: install.sh eksik bağımlılıkta onay `read`'i yapıyor; TTY'li
+# bir test koşumunda bu, testi süresiz bekletirdi. --prefix kipi onayı
+# zaten atlar (bkz. install.sh), `</dev/null` ise bunu testte de garantiler.
+PFX="$PFXROOT/pfx"
+# 13h icin: --prefix kurulumundan ONCE gercek config'in parmak izi.
+# "Dosya yok" ile "dosya var ama degismemis" AYNI sey degildir; bu yuzden
+# yokken sentinel olarak "yok" yaziyoruz.
+REAL_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/cachy-agent/agents.conf"
+REAL_CONF_BEFORE="yok"
+[[ -f "$REAL_CONF" ]] && REAL_CONF_BEFORE=$(cksum < "$REAL_CONF")
+if bash "$REPO/install.sh" --prefix "$PFX" </dev/null >/dev/null 2>&1; then
+  ok "13a install --prefix exit 0"
+else bad "13a install --prefix" "exit=$?"; fi
+missing=""
+for f in "$PFX/bin/cachy-agent" "$PFX/bin/cachy-agent-agents" "$PFX/config/cachy-agent/agents.conf" \
+         "$PFX/config/fish/conf.d/cachy-agent.fish" "$PFX/applications/cachy-agent.desktop" \
+         "$PFX/config/systemd/user/cachy-crash-watch.service" \
+         "$PFX/plasmoids/org.cachyagent.usage/metadata.json" \
+         "$PFX/config/fuzzel/fuzzel.ini" "$PFX/icons/cachy-agent.svg"; do
+  [[ -f "$f" ]] || missing="$missing${f#"$PFX"/} "
+done
+if [[ -z "$missing" ]]; then ok "13b --prefix dosyalari yerinde"; else bad "13b --prefix" "yok: $missing"; fi
+
+# 13b-2. Ters yön: yanlış yere (config/ OLMADAN) sızan dosya olmamalı.
+# Sadece "doğru yerde var" demek, install.sh'in aynı dosyayı İKİ yere birden
+# yazmasını sessizce geçirirdi. `config/`'li yerleşimi iki yönden kilitliyoruz.
+stray=""
+for f in "$PFX/fish/conf.d/cachy-agent.fish" "$PFX/systemd/user/cachy-crash-watch.service"; do
+  [[ -e "$f" ]] && stray="$stray${f#"$PFX"/} "
+done
+if [[ -z "$stray" ]]; then ok "13b-2 --prefix yanlis yere sizmadi"; else bad "13b-2 --prefix sizinti" "asiri: $stray"; fi
+
+# 13b-3. `__HOME__` genişletmesi prefix'e olmalı (spec §7.1): desktop dosyası
+# test prefix'ini gösterir, mutlak yol olarak geçerli kalır.
+HOME_LEFT=""
+for f in "$PFX/applications/cachy-agent.desktop" "$PFX/plasmoids/org.cachyagent.usage/contents/ui/main.qml"; do
+  [[ -e "$f" ]] || continue
+  grep -q '__HOME__' "$f" && HOME_LEFT="$HOME_LEFT$(basename "$f"):__HOME__ "
+  grep -q "$PFX" "$f" || HOME_LEFT="$HOME_LEFT$(basename "$f"):prefix-yok "
+done
+if [[ -z "$HOME_LEFT" ]]; then ok "13b-3 __HOME__ prefix ile genisletildi"; else bad "13b-3 __HOME__ genislemesi" "$HOME_LEFT"; fi
+
+if bash "$REPO/uninstall.sh" --prefix "$PFX" </dev/null >/dev/null 2>&1; then
+  ok "13c uninstall --prefix exit 0"
+else bad "13c uninstall --prefix" "exit=$?"; fi
+left=""
+for f in "$PFX/bin/cachy-agent" "$PFX/bin/cachy-agent-agents" "$PFX/config/cachy-agent/agents.conf" \
+         "$PFX/config/fish/conf.d/cachy-agent.fish" "$PFX/applications/cachy-agent.desktop" \
+         "$PFX/config/systemd/user/cachy-crash-watch.service" \
+         "$PFX/plasmoids/org.cachyagent.usage/metadata.json" \
+         "$PFX/config/fuzzel/fuzzel.ini" "$PFX/icons/cachy-agent.svg"; do
+  [[ -e "$f" ]] && left="$left${f#"$PFX"/} "
+done
+if [[ -z "$left" ]]; then ok "13d uninstall --prefix temizledi"; else bad "13d uninstall --prefix" "kaldi: $left"; fi
+
+# 13e. ikinci calistirma (idempotans)
+if bash "$REPO/uninstall.sh" --prefix "$PFX" </dev/null >/dev/null 2>&1; then ok "13e uninstall iki kez calisir"; else bad "13e uninstall idempotent" "exit=$?"; fi
+
+# 13f. `agents.conf` YALNIZCA YOKKEN yazilir; kullanicinin duzenlemesi her
+# kurulumda korunur. Bu, catalog dosyasinin tek amaci: v0.1.0'da ajan listesi
+# script'lerin icindeydi, kurulum hicbir seyi yazmiyordu; simdi dosya yaziliyor ve
+# `cp -f` kullanilsa kullanici listenin uzerine yazilirdi.
+PFX2="$PFXROOT/pfx2"
+bash "$REPO/install.sh" --prefix "$PFX2" </dev/null >/dev/null 2>&1 || true
+if [[ -f "$PFX2/config/cachy-agent/agents.conf" ]]; then
+  printf '\n# kullanici duzenlemesi\n' >> "$PFX2/config/cachy-agent/agents.conf"
+  before_sum=$(cksum < "$PFX2/config/cachy-agent/agents.conf")
+  bash "$REPO/install.sh" --prefix "$PFX2" </dev/null >/dev/null 2>&1; rc=$?
+  after_sum=$(cksum < "$PFX2/config/cachy-agent/agents.conf")
+  if [[ $rc -eq 0 && "$before_sum" == "$after_sum" ]]; then
+    ok "13f yeniden kurulum agents.conf'i EZMIYOR (kullanici duzenlemesi korunur)"
+  else
+    bad "13f agents.conf ezildi" "rc=$rc once=$before_sum sonra=$after_sum"
+  fi
+else
+  bad "13f agents.conf yazilmadi" "$PFX2/config/cachy-agent/agents.conf yok"
+fi
+
+# 13g. IZLEME KONUMU: --prefix kurulumu config'i PREFIX'in altina yaziyor,
+# `cachy-agent-agents` ise config'i
+#   ${CACHY_AGENT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cachy-agent/agents.conf}
+# yolundan cozuyor. Iki sozlesme birbirini TUTMADI (veya tutmayacak)sa indirme
+# sessizce "config yok" dersin ve menu `agent listesi alinamadi` ile exit 1
+# verir. Bu test kurulan config'in ayni CLI tarafindan okunabildigini kanitlar.
+if CACHY_AGENT_CONFIG="$PFX2/config/cachy-agent/agents.conf" \
+     "$REPO/src/bin/cachy-agent-agents" check >/dev/null 2>&1; then
+  ok "13g kurulan agents.conf cachy-agent-agents tarafindan okunuyor"
+else
+  bad "13g kurulan config okunamadi" "check exit=$? — indirme menu acmaz"
+fi
+rm -rf "$PFX2"
+
+# 13h. --prefix KURULUMU config'i PREFIX altina yazar, `~/.config` altina DEGIL.
+# Yanlislikla gercek config'i yazmak, testin calistigi makinedeki kullanicinin
+# katalog dosyasini ezmektir (ve aslinda onu DUZELTIRDIĞINI sanip sessizce
+# yeni ajanlarin listesini degistirmek olurdu).
+REAL_CONF_AFTER="yok"
+[[ -f "$REAL_CONF" ]] && REAL_CONF_AFTER=$(cksum < "$REAL_CONF")
+if [[ "$REAL_CONF_BEFORE" == "$REAL_CONF_AFTER" ]]; then
+  ok "13h --prefix gercek ~/.config altina YAZMADI (yalnizca prefix)"
+else
+  bad "13h --prefix gercek config'e dokundu" "$REAL_CONF: once=$REAL_CONF_BEFORE sonra=$REAL_CONF_AFTER"
+fi
+
 # --- Task 2: argv differential (spec §8.1/§8.2) ---
 # Bu ikisi GOLDEN FILE testleridir: refactor ÖNCESİ de geçerler, çünkü mevcut
 # davranışı kilitlerler. Kırmızıya dönmeleri = davranış değişti demektir.
