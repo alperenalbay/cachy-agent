@@ -29,7 +29,9 @@ run_agent() {
   # Ölçüm (argv-baseline.md, agy dalı): promptlu
   #   `--dangerously-skip-permissions --effort low --prompt PROMPT`
   # promptsuz ise `--dangerously-skip-permissions` (effort YOK).
-  # ${flags%% *} ilk bayrağı (izin bayrağını) alır; config'teki sıraya bağlıdır.
+  # ${flags%% *} ilk bayrağı (izin bayrağını) alır; config'teki sıraya bağlıdır;
+  # cachy-agent-agents check bu sırayı agy satırında ZORLAR (bayrak yanlış
+  # sırada başlıyorsa check reddeder), yani kural tek yerde aranabilir.
   if [[ "$agent" == "agy" ]]; then
     if ! agy --help 2>&1 | grep -q dangerously-skip-permissions; then
       flags=""

@@ -91,18 +91,45 @@ done
 stub_yaz "$SCRATCH/stub_agyA" agy "$AGY_YARDIM_A"
 stub_yaz "$SCRATCH/stub_agyB" agy "$AGY_YARDIM_B"
 
-# olc <stub dizini> <ajan> [ek argümanlar...] -> ölçülen argv (tek satır)
-olc() {
+# ÇAĞRILMADI sentini. agy+B hücresinin beklenen değeri "" (çıplak agy) olduğu
+# için, boş logu "" ile döndürmek "doğru çalıştı" ile "hiç çalışmadı"yı
+# AYNI gösterirdi — run_agent `return 7` ile hiç exec etseydi araç yeşil kalırdı.
+# Bu sentini hiçbir gerçek argv'ye benzemez; boş beklenen değerle eşleşemez.
+# rc de yan etkiyle tutulur: temiz çıplak çağrı (rc=0) ile bozuk erken çıkış
+# (rc≠0) artık ayırt edilebilir.
+SENTINEL_CAGRILMADI='<stub-cagdirilmadi>'
+
+# SON_RC: son çalıştırmada cachy-agent'ın çıkış kodu
+SON_RC=0
+
+# calistir <stub dizini> <ajan> [ek argümanlar...] -> SON_RC ayarlanır
+# Ayırık tutulur ki $(...) alt kabuğu SON_RC'yi dışarı taşımasın; kaydet
+# rc'yi buradan okur.
+calistir() {
   local stub="$1" ajan="$2"; shift 2
   : > "$ARGV_LOG"; : > "$STDERR_LOG"
   ( cd "$SCRATCH/cwd" && PATH="$stub:$PATH" cachy-agent --inline "$ajan" "$@" ) \
       >/dev/null 2>"$STDERR_LOG"
+  SON_RC=$?
+  return 0
+}
+
+# normalize <ajan> -> log'dan düz argv metni (yoksa sentini)
+normalize() {
+  local ajan="$1" satir
+  # Log BOŞSA stub hiç çalışmamıştır (cachy-agent çökmüş, erken dönmüş ya da
+  # ajan hiç exec edilmemiş). Bu, çıplak `agy` çağrısından AYIRT EDİLEMEZ
+  # çünkü o da log'a yazmaz; ayrım log'un kendisinden yapılır.
+  if [[ ! -s "$ARGV_LOG" ]]; then
+    printf '%s rc=%d' "$SENTINEL_CAGRILMADI" "$SON_RC"
+    return 0
+  fi
+
   # Stub "<ajan> [arg] [arg]" yazar; köşeli parantezler argüman SINIRLARINI
   # görünür kılar (bir bayrak iki parçaya bölünse fark edilir). Baseline
   # tablosu ise boşlukla ayrılmış düz metin tutar. Bu yüzden ajan adı
   # atılır, sonra "[x]" -> "x" normalize edilir; sonuç argv-baseline.md'deki
   # hücrelerle BİREBİR aynı olur.
-  local satir
   satir=$(head -n 1 "$ARGV_LOG")
   satir="${satir#"$ajan"}"
   satir="${satir# }"
@@ -142,16 +169,18 @@ beklenen_promptsuz() {
 BEKLENEN_TUM=18
 BEKLENEN_AGY=4
 
-declare -a ETIKET=() BEKLENEN=() GELEN=()
+declare -a ETIKET=() BEKLENEN=() GELEN=() RC=()
 N=0
 SAPMA=0
 
 # kaydet <etiket> <ajan> <beklenen argv> <stub dizini> [ek argümanlar...]
 kaydet() {
   local etiket="$1" ajan="$2" bek="$3" stub="$4"; shift 4
-  local gelen
-  gelen=$(olc "$stub" "$ajan" "$@")
-  ETIKET+=("$etiket"); BEKLENEN+=("$bek"); GELEN+=("$gelen")
+  local gelen rc
+  calistir "$stub" "$ajan" "$@"
+  rc=$SON_RC
+  gelen=$(normalize "$ajan")
+  ETIKET+=("$etiket"); BEKLENEN+=("$bek"); GELEN+=("$gelen"); RC+=("$rc")
   N=$((N+1))
   [[ "$gelen" == "$bek" ]] || SAPMA=$((SAPMA+1))
   return 0
@@ -182,9 +211,9 @@ if [[ "$MOD" == "emit" ]]; then
   {
     printf '# argv.txt — tests/argv-differential.sh --emit çıktısı\n'
     printf '# BU DOSYA KAYNAK DEĞİLDİR: golden file argv-baseline.md içidir.\n'
-    printf '# sütunlar: <ölçüm> | <baseline> | <ölçülen>\n'
+    printf '# sütunlar: <ölçüm> | <baseline> | <ölçülen> | rc\n'
     for ((i=0; i<N; i++)); do
-      printf '%s | %s | %s\n' "${ETIKET[i]}" "${BEKLENEN[i]}" "${GELEN[i]}"
+      printf '%s | %s | %s | %s\n' "${ETIKET[i]}" "${BEKLENEN[i]}" "${GELEN[i]}" "${RC[i]}"
     done
   } > "$out"
   printf 'argv: %d ölçüm -> %s\n' "$N" "$out"
@@ -196,9 +225,11 @@ for ((i=0; i<N; i++)); do
   [[ "${GELEN[i]}" == "${BEKLENEN[i]}" ]] && continue
   printf 'FAIL: %s baseline "%s" != ölçülen "%s"\n' \
          "${ETIKET[i]}" "${BEKLENEN[i]}" "${GELEN[i]}"
-  # Boş log genellikle "stub hiç çağrılmadı" demektir; sebebi stderr'de ara.
-  if [[ -z "${GELEN[i]}" ]]; then
-    printf '       (stub çağrılmadı — stderr: %s)\n' "$(head -n 1 "$STDERR_LOG")"
+  # Sentini: stub hiç çalışmadı. Nedenini stderr ve çıkış koduyla birlikte ver —
+  # boş beklenen değerle eşleşen bir hücrede bile sebep görünür olmalı.
+  if [[ "${GELEN[i]}" == "$SENTINEL_CAGRILMADI"* ]]; then
+    printf '       (stub çağrılmadı, cachy-agent rc=%s — stderr: %s)\n' \
+           "${RC[i]}" "$(head -n 1 "$STDERR_LOG")"
   fi
 done
 

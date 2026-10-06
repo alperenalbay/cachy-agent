@@ -189,6 +189,15 @@ check_config() {
     if [[ "$id" == "agy" && -n "${A_FLAGS[i]}" && "${A_PF[i]}" != "--prompt" ]]; then
       perr "$ln" "agy satırında flags doluyken prompt_flag '--prompt' olmalı"; bad=1
     fi
+    # §5.4.1: cachy-agent run_agent, promptsuz agy çağrısında flags'ın YALNIZ
+    # İLK kelimesini geçirir (`${flags%% *}`) — ölçülen davranış, effort bayrağı
+    # interaktif oturumda düşer. Bu kural olmadan bayrakları yeniden sıralayan
+    # bir kullanıcı ajanı sessizce kırpılmış/geçersiz bir bayrakla çağırır
+    # (ör. `agy --effort`). Kullanıcı config'i kendi düzenlediği için sıra
+    # burada zorlanır.
+    if [[ "$id" == "agy" && -n "${A_FLAGS[i]}" && "${A_FLAGS[i]}" != --dangerously-skip-permissions* ]]; then
+      perr "$ln" "agy satırında flags '--dangerously-skip-permissions' ile BAŞLAMALI (run_agent promptsuz çağrıda flags'ın ilk kelimesini geçirir; sıra bozulursa ajan kırpılmış bayrakla çağrılır): '${A_FLAGS[i]}'"; bad=1
+    fi
   done
 
   # 6. WORKDIR: en çok 1 tane, tek alan (alan ayracı '|', kaçışsız '|' hata)

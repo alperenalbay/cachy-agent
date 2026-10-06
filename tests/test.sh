@@ -345,6 +345,20 @@ printf 'codex=Codex|x|-|"--prompt"|-\n' > "$SCRATCH/pf-tirnak.conf"
 export CACHY_AGENT_CONFIG="$SCRATCH/pf-tirnak.conf"
 neg "11aj prompt_flag tirnak reddedildi" "prompt_flag içinde tırnak" "$AG" check
 
+# 11ak: agy flags SIRASI — run_agent promptsuz çağrıda flags'ın YALNIZ ilk
+# kelimesini geçirir (`${flags%% *}`, ölçülen davranış). Bayrak yanlış sırada
+# başlarsa ajan sessizce KIRPILMIŞ bir bayrakla çağrılır (ör. `agy --effort`),
+# çıkış kodu 0, uyarı yok. check bunu reddetmeli (spec §5.4.1).
+printf 'agy=agy|-|--effort low --dangerously-skip-permissions|--prompt|-\n' > "$SCRATCH/agy-sira.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/agy-sira.conf"
+neg "11ak agy flags sirasi reddedildi" "*BAŞLAMALI" "$AG" check
+
+# 11al: dogru sira -> check GECER. Kural yanlışlıkla her agy'yi reddetmemeli;
+# aksi halde 11ak "her zaman kırmızı" olur ve kuralı kanıtlamaz.
+printf 'agy=agy|-|--dangerously-skip-permissions --effort low|--prompt|-\n' > "$SCRATCH/agy-sira-ok.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/agy-sira-ok.conf"
+if "$AG" check >/dev/null 2>&1; then ok "11al dogru agy sirasi kabul edildi"; else bad "11al dogru agy sirasi" "check dogru sirayi reddetti (kural fazla katı)"; fi
+
 unset CACHY_AGENT_CONFIG
 
 # --- Task 2: argv differential (spec §8.1/§8.2) ---

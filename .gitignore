@@ -3,3 +3,6 @@ __pycache__/
 
 # git worktree'ler (SDD calisma alani)
 .worktrees/
+
+# argv-differential.sh --emit ciktisi (turetilmis; golden file argv-baseline.md)
+tests/fixtures/argv.txt
