@@ -122,7 +122,16 @@ FIX="$REPO/tests/fixtures"
 # sıfır dışıdır ve testi yanlış geçirir. Burada TAM OLARAK rc=1 ve stderr'da
 # beklenen gerekçe aranır; test ancak doğru hatayla geçer.
 #   $1 etiket · $2 beklenen stderr GLOB kalıbı · $3.. çalıştırılacak komut
-# ($want tırnaksız: [[ ]] içinde glob olarak yorumlanır, `*` kullanılabilir)
+#
+# İKİ TUZAK (kopyalayanlar dikkat):
+#  1. $want tırnaksız geçiyor: [[ ]] içinde GLOB olarak yorumlanır. `*` "herhangi
+#     biri", AMA `?` "tek karakter", `[`/`]` karakter sınıfı, `\` kaçıştır. Yani
+#     beklenen mesajda gerçekten `?` geçiyorsa `\?` yaz, aksi halde `a?c`
+#     kalıbı `abc` ile de eşleşir (sessiz yanlış geçme). Harf karakterlerinden
+#     oluşan düz kelimeler (`tırnak`, `WORKDIR`, `prompt_flag`) güvenlidir.
+#  2. neg() rc'yi 1'e sabitler: yalnızca "exit 1 bekleniyor" testleri içindir.
+#     exit 2 (kullanım hatası) veya exit 0 için KULLANILMAZ — 11aa/11ae gibi
+#     o testler rc'yi elle kontrol eder.
 neg() {
   local label="$1" want="$2"; shift 2
   local err rc
@@ -306,6 +315,35 @@ ext=$("$AG" external 2>/dev/null | tr '\n' ' ')
 if [[ $rc -eq 0 && "$inst" == "-" && -z "$ext" ]]; then
   ok "11af bos install -> '-', external bos"
 else bad "11af bos install okuma yolu" "rc=$rc install='$inst' external='$ext'"; fi
+
+# 11ag: WORKDIR satiri YOK -> geriye uyum: $HOME/Projeler (spec §5.1)
+# v0.1.0 config'inde WORKDIR satiri yok; bu yol o kullanicilarin davranisini
+# degistirmeden tutar. Duzlestirilirse (geriye uyum kaybi) test kirmizi olur.
+printf 'codex=Codex|npm i -g @openai/codex|--approve-for-me|-|codex login\n' > "$SCRATCH/wd-yok.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/wd-yok.conf"
+wd=$("$AG" workdir 2>/dev/null); rc=$?
+if [[ $rc -eq 0 && "$wd" == "$HOME/Projeler" ]]; then
+  ok "11ag WORKDIR yok -> ~/Projeler geriye uyumu"
+else bad "11ag WORKDIR yok" "rc=$rc wd='$wd' (beklenen: $HOME/Projeler)"; fi
+
+# 11ah: bos WORKDIR= -> check reddeder, satir numarasiyla (WORKDIR bos yazilmis)
+printf 'WORKDIR=\ncodex=C|x|-|--prompt|x\n' > "$SCRATCH/wd-bos.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/wd-bos.conf"
+neg "11ah bos WORKDIR reddedildi" "*:1:*WORKDIR boş*" "$AG" check
+
+# 11ai: ~'li ve ~/Projeler OLMAYAN yol genisletilir (literal gecmez)
+printf 'WORKDIR=~/Projeler/deneme\ncodex=C|x|-|--prompt|x\n' > "$SCRATCH/wd-tilde.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/wd-tilde.conf"
+wd=$("$AG" workdir 2>/dev/null); rc=$?
+if [[ $rc -eq 0 && "$wd" == "$HOME/Projeler/deneme" ]]; then
+  ok "11ai ~-li baska WORKDIR genisletildi"
+else bad "11ai ~ genisletme" "rc=$rc wd='$wd' (beklenen: $HOME/Projeler/deneme)"; fi
+
+# 11aj: prompt_flag icinde tirnak reddi (spec §5.5.3'in prompt_flag yarısı;
+# 11k yalnızca flags yarısını kapsıyor). 6 alan — alan sayisi kuralı tetiklenmez.
+printf 'codex=Codex|x|-|"--prompt"|-\n' > "$SCRATCH/pf-tirnak.conf"
+export CACHY_AGENT_CONFIG="$SCRATCH/pf-tirnak.conf"
+neg "11aj prompt_flag tirnak reddedildi" "prompt_flag içinde tırnak" "$AG" check
 
 unset CACHY_AGENT_CONFIG
 
