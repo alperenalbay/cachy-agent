@@ -9,8 +9,14 @@
 # süreçte PATH'in `~/.local/bin` içerdiği garanti DEĞİLDİR. Aynı sebeple
 # systemd --user unit'inin PATH'i login shell'inkinden farklıdır. Bu yüzden
 # kardeş binary'ler BARE adla değil, mutlak $BIN yoluyla çağrılır (Ruling 10).
-# Aynı $BIN değişkeni `CACHY_AGENT_BIN_DIR` ile ezilebilir — testler tek sed
-# ile dört çağıranın hepsini stub dizinine geçirir.
+#
+# `CACHY_AGENT_BIN_DIR` SÖZLEŞMESİ: tek değişken dört çağıranın da binary
+# dizinidir (bu script, cachy-agent-open, cachy-agent-install,
+# cachy-agent-usage-update). Kurulumda doğal olarak `~/.local/bin`.
+# Bu değişkeni başka bir yere yazan herkes o dizinde `cachy-agent`,
+# `cachy-agent-agents` VE `cachy-agent-usage-*` koleksiyonlarının hepsinin
+# bulunmasını sağlamak zorundadır — eksik bir dosya hata vermek yerine
+# sessizce atlanır. Tek değişken bilinçlidir; ikinci bir değişken yoktur.
 set -euo pipefail
 BIN="${CACHY_AGENT_BIN_DIR:-$HOME/.local/bin}"
 AGENT_BIN="$BIN/cachy-agent"

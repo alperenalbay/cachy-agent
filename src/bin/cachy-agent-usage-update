@@ -12,7 +12,9 @@ set -u
 # `cachy-agent-agents` çağrısı orada `command not found` (rc 127) veriyor ve
 # `mapfile < <(...)` bunu YUTUYORDU — script rc 0 dönüp sıfır dosya yazıyordu,
 # yani kullanım verisi 15 dakikada bir sessizce ölüyordu. `CACHY_AGENT_BIN_DIR`
-# testler ve denemeler için bu dizini ezer.
+# testler ve denemeler için bu dizini ezer; sözleşmesi cachy-agent-menu'da
+# yazılıdır (aynı dizin katalog okuyucusu, `cachy-agent` ve `cachy-agent-usage-*`
+# koleksiyonlarının HEPSİNİ barındırmalıdır).
 BIN="${CACHY_AGENT_BIN_DIR:-$HOME/.local/bin}"
 BIN_DIR="$BIN"
 AGENTS_BIN="$BIN/cachy-agent-agents"
