@@ -308,10 +308,47 @@ Bu, mevcut `cachy-agent:16-43` ile **davranış olarak özdeş**tir:
 | codex | `codex --approve-for-me "$*"` | `pf="-"` → konumsal, aynı |
 | crush / copilot / cursor-agent / grok | konumsal | `pf="-"` → aynı |
 
-Tek fark: `agy`'nin `--help` çıktısında `dangerously-skip-permissions` yoksa
-mevcut kod bayrağı düşürüyor (`cachy-agent:20-25`). Bu koşullu davranış
-korunur — config okunduktan sonra, `agy` özelinde, `cachy-agent-agents`'tan
-bağımsız bir `if` olarak kalır.
+### 5.4.1 `agy` koşullu bayrakları — ölçülmüş gerçek
+
+`cachy-agent:20-25`, `agy --help` çıktısında `dangerously-skip-permissions`
+geçiyorsa bayrakları geçiyor, geçmiyorsa **düşürüyor**. Bu iki dalın gerçek
+argv'si argv-yakalama stub'larıyla ölçüldü:
+
+| `agy --help` çıktısı | prompt var | prompt yok |
+|---|---|---|
+| bayrağı **içerir** | `agy --dangerously-skip-permissions --effort low --prompt PROMPT` | `agy --dangerously-skip-permissions` |
+| bayrağı **içermez** | `agy --prompt PROMPT` | `agy` |
+
+**Tasarım sonucu:** config'teki sabit `flags` alanı bu dalı ifade edemez —
+B dalında `agy` **çıplak** çağrılıyor, bayraklar yok. Bu nedenle `agy`'nin
+config satırına iki alan daha eklenir:
+
+```
+agy=agy|-|--dangerously-skip-permissions --effort low|--prompt|-|yes
+gy_fallback_flags=--prompt
+```
+
+Değişiklik daha basit bir yolla çözülebilir: `--help` kontrolü
+`cachy-agent-agents`'a bir sorgu olarak taşınır ve `run_agent` config'i
+okuduktan sonra `agy`'de şu koşulu uygular:
+
+```bash
+# agy: --help bayrağı desteklemiyorsa izin bayraklarını düşür (mevcut davranış)
+if [[ "$agent" == "agy" ]] && ! agy --help 2>&1 | grep -q dangerously-skip-permissions; then
+  flags=""      # çıplak çağrı
+fi
+```
+
+**Seçim: koşullu `agy` kontrolü `run_agent`'da kalır, config'e ek alan
+eklenmez.** Gerekçe: bu davranış tek bir agent'a özgü ve CLI sürümüne bağlı
+(agy `--help` çıktısı değişirse config'i güncellemek gerekir — ki bu, hatayı
+taşımaktır). Ölçülen tablo `docs/agents.md`'de "agy koşullu bayrakları" olarak
+belgelenir ve `cachy-agent-agents check` şunu doğrular: `agy` satırında
+`flags` **boş değil**se, `prompt_flag` `--prompt` olmalıdır (B dalı için
+`flags` yine de tanımlı kalır; koşulu `run_agent` uygular).
+
+Bu, `agy`'nin `--help`'ını testte çağırmayı gerektirir. Test 14 (§7.2) bu iki
+dalı argv stub'larıyla doğrulayacak (§8.1).
 
 ### 5.5 `check` — config doğrulaması
 
@@ -465,10 +502,11 @@ Her grup yeni kurulum bağımlılığına göre sınıflandırılır:
 | **11 (yeni)** `agents.conf` parse | geçerli config → `list` doğru; bozuk config → exit 1 + stderr; `check` geçerli/bozuk fixture |
 | **12 (yeni)** `WORKDIR` | config'ten okunur; yoksa `~/Projeler` geriye uyumu |
 | **13 (yeni)** `install/uninstall --prefix` | geçici prefix'e kur → dosyaları doğrula → uninstall → geriye kalan kontrol |
+| **14 (yeni)** `agy` koşullu bayrakları | §5.4.1'deki iki dal, argv stub'ıyla (§8.1) |
+| **15 (yeni)** **argv differential** | §8.1 — her agent için refactor öncesi/sonrası argv birebir aynı |
 
 `SKIP` yeni bir sonuç tipidir: `PASS`/`FAIL` yanında, özet satırında ayrı
 sayılır ve **exit code'u etkilemez**.
-
 ### 7.3 Sahte kolektörler (test 6b)
 
 Test, `usage-update`'i `$BIN` içindeki `cachy-agent-usage-<id>` script'lerini
@@ -543,9 +581,156 @@ Not: `smoke.sh:28` `src/` içinde `/home/` arar — bu, `__HOME__` placeholder'�
 
 ---
 
-## 8. Faz 4 — Dokümantasyon
+---
 
-### 8.1 `README.md` / `README.tr.md`
+## 8. Test Stratejisi
+
+Bu bölüm, spec'in asıl riskine (`run_agent` refactor'ının davranışı bozması)
+doğrudan yanıt verir. Yöntem TDD'dir: **test önce yazılır, kırıldığı görülür,
+sonra kod yazılır.**
+
+### 8.1 argv-differential testi — çekirdek teknik
+
+Mevcut testler `run_agent`'ın **hangi bayrakları geçirdiğini** doğrulamıyor.
+Test 2 (`--help`), 4 (`--prompt` argümansız), 5 (`--pick` geçersiz) sadece
+argüman doğrulaması. Yani refactor sonrası `codex`'e `--prompt` bayrağı
+geçseydi mevcut testler **yeşil kalırdı** — `codex --approve-for-me --prompt
+PROMPT` muhtemelen çalışmazdı ama test bunu yakalamazdı.
+
+Çözüm: **agent'ları PATH'te stub'larla gölgelemek.** Her stub çağrıldığında
+argv'sini bir log'a yazar:
+
+```bash
+#!/usr/bin/env bash          # stub: codex
+[[ "${1:-}" == "--help" ]] && { echo "Options: --approve-for-me"; exit 0; }
+printf "codex" >> "$ARGV_LOG"
+for x in "$@"; do printf " [%s]" "$x" >> "$ARGV_LOG"; done
+printf "\n" >> "$ARGV_LOG"
+```
+
+Test, `PATH="$STUB:$PATH"` ile `cachy-agent --inline codex "PROMPT"` çalıştırır
+ve log'daki argv'yi beklenen değerle karşılaştırır. Gerçek `codex`, ağ,
+credential veya `$HOME/.codex/auth.json` **hiçbir şeye dokunmaz.**
+
+Bu mekanizma prototip olarak doğrulandı (§8.2). `agy` için iki stub gerekir
+(bayrak içeren / içermeyen `--help`), §5.4.1'deki iki dalı kapsar.
+
+### 8.2 Ölçülmüş baseline — davranış sözleşmesi
+
+Faz 1 başlamadan **önce**, mevcut kodun ürettiği argv tam olarak kaydedilir.
+Bu tablo golden file olur: refactor sonrası aynı test aynı argv'yi üretmelidir.
+
+Mevcut kod ölçülmüştür (`--inline <agent> "PROMPT"` ve prompt'suz):
+
+| Agent | prompt var | prompt yok |
+|---|---|---|
+| opencode | `--auto --prompt PROMPT` | `--auto` |
+| agy (bayrak var) | `--dangerously-skip-permissions --effort low --prompt PROMPT` | `--dangerously-skip-permissions` |
+| agy (bayrak yok) | `--prompt PROMPT` | — (çıplak `agy`) |
+| claude | `--permission-mode auto -p PROMPT` | `--permission-mode auto` |
+| codex | `--approve-for-me PROMPT` | `--approve-for-me` |
+| crush | `--yolo PROMPT` | `--yolo` |
+| copilot | `--allow-all PROMPT` | `--allow-all` |
+| cursor-agent | `--yolo --trust PROMPT` | `--yolo --trust` |
+| grok | `--permission-mode bypassPermissions PROMPT` | `--permission-mode bypassPermissions` |
+
+Bu tablo `tests/fixtures/argv-baseline.txt` olarak versiyonlanır ve test 15
+bununla karşılaştırır. **Tablo değişirse test kırmızıya döner** — ve bu,
+"davranış değişti" demektir. Değişiklik isteniyorsa tablo bilinçli
+güncellenir.
+
+Bu ölçüm §5.4.1'i doğruladı: `agy` iki farklı argv üretiyor. Spec'teki
+`agy` config satırı yalnızca bayraklı dalı doğru tanımlıyordu; koşullu
+bayrak düşürme `run_agent`'da kalıyor (§5.4.1).
+
+### 8.3 TDD döngüsü — faz faza
+
+Her faz **kırmızı → yeşil → refactor** döngüsüyle ilerler. Test yazılmadan
+kod yazılmaz.
+
+**Faz 1 (config + okuyucu):**
+1. `RED` — `tests/fixtures/agents-valid.conf` ve `agents-broken.conf`
+   fixture'ları yaz; test 11'i yaz. `cachy-agent-agents` henüz yok →
+   test **başarısız** (command not found).
+2. `GREEN` — `cachy-agent-agents` + `agents.conf` yaz; test 11 geçer.
+3. `RED` — test 15'i (argv differential) yaz; mevcut kod baseline'ı üretir →
+   test **geçer** (çünkü henüz refactor yok). Bu kasıtlı: test mevcut
+   davranışı kilitler.
+4. Refactor `run_agent` → test 15 **hâlâ geçer** olmalı. Kırmızıya dönerse
+   davranış bozulmuş demektir → düzelt, kodu değiştirme.
+5. `RED` — test 14 (`agy` iki dal) → `GREEN`.
+6. Kalan 6 hardcode temizlenir; test 1 (`bash -n`) ve 15 her adımda yeşil.
+
+Adım 3'ün kasıtlı olarak geçmesi önemlidir: TDD'de "test geçti" genelde
+sorun işaretidir, ama burada test **mevcut davranışı sabitleyen** bir golden
+file'dır. Refactor başlamadan önce kurulur, refactor boyunca kırmızıya
+dönmemesi gerekir.
+
+**Faz 2 (testler + prefix + CI):**
+- `RED` — test 13 (prefix kurulumu). `install.sh --prefix` yok → başarısız.
+- `GREEN` — `--prefix` uygula.
+- Mevcut 10 grup repo-relative'a taşınır; her biri yeni ortamda yeşil.
+- Test 6b sahte kolektörlere geçer; `CACHY_AGENT_BIN_DIR` seam'i eklenir.
+- CI eklenir.
+
+**Faz 3 (gömülü Python):**
+- `RED` — test 16: `cachy-agent-usage-fetch` çıktısı `main.qml`'nin beklediği
+  şemayla eşleşmeli (`providers[].id/name/today/total/limits[]`, `alarm`).
+  Script yok → başarısız.
+- `GREEN` — script yaz; QML ve `cachy-agent:106` ona geçer.
+- `XDG_STATE_HOME` testi: `XDG_STATE_HOME` geçici dizine ayarlanır, fetch
+  oradan okur (plasmoid hâlâ `~/.local/state` okuyordu — test bunu yakalar).
+
+**Faz 4 (docs):** kod değişikliği yok; `smoke.sh`'in grep kontrolleri ve
+manuel doğrulama.
+
+### 8.4 Neyi test etmiyoruz
+
+Dürüstlük ilkesi: testlerin kapsamadığı şeyleri açıkça söylemeliyiz.
+
+- **Plasmoid QML render'ı.** QML'i headless çalıştırmak gerekir; kapsam dışı.
+  Test 16 yalnızca verinin doğru şemada geldiğini doğrular, QML'in doğru
+  çizdiğini değil. QML değişikliği elle gözle kontrol edilir.
+- **Gerçek agent davranışı.** Stub'lar argv'yi doğrular, agent'ın prompt'u
+  anlamasını değil. `codex --approve-for-me PROMPT`'in gerçekten çalıştığı
+  varsayılır.
+- **`systemctl --user` entegrasyonu.** Test 8 SKIP olabilir. Servislerin
+  gerçekten başladığı kurulumdan sonra elle doğrulanır.
+- **`agy --help` çıktısı zamanla değişirse.** Test 14 iki dalı da kontrol
+  eder, ama hangi dalın geçerli olduğuna karar vermez — bu, `agy`'nin
+  sürümüne bağlı. Davranış korunduğu için sorun değil.
+- **Çökme tespiti (`cachy-crash-watch`).** `journalctl` core-dump mesajı
+  üretmez; test edilemez. Mevcut hâliyle bırakılır.
+
+### 8.5 Tanım — Bitti (sertleştirilmiş)
+
+`grep` tabanlı ölçütler yetmez — §8.2'de gösterildiği gibi davranış kırıkken
+hepsi yeşil kalabilir. Son ölçüt **testlerin geçmesi ve testlerin gerçekten
+kırıldığını görmüş olmaktır**:
+
+1. `src/` içinde 8 agent'ın hardcoded listesi kalmaz
+   (`grep -rn 'agy claude codex' src/` → 0, `agents.conf` hariç).
+2. `src/` içinde gömülü `python3 -c` komutu kalmaz.
+3. `./tests/test.sh` temiz checkout'ta, kurulum yapmadan, ağa ve credential'e
+   dokunmadan exit 0 verir.
+4. **Test 15 (argv differential) yeşildir** — yani refactor sonrası her
+   agent'ın argv'si §8.2'deki baseline ile birebir aynı.
+5. **Test 14 yeşildir** — `agy`'nin iki dalı da doğru.
+6. **Test 11'in kırmızıya döndüğü görülmüştür** (test önce yazıldı, kırıldı,
+   sonra kod yazıldı).
+7. `cachy-agent-agents check` geçerli config → 0, bozuk config → 1.
+8. README'de kodla çelişen iddia kalmaz.
+9. CI her push'ta yeşil.
+10. `VERSION` = `0.2.0`.
+
+Nokta 6 doğrulanamaz bir kalan değildir — bu çalışma boyunca tutulan
+süreç kuralıdır ve commit geçmişinde her fazın "önce test, sonra kod"
+sırasıyla yazıldığı görülmelidir.
+
+
+## 9. Faz 4 — Dokümantasyon
+
+### 9.1 `README.md` / `README.tr.md`
 
 Düzeltmeler:
 
@@ -563,17 +748,17 @@ Düzeltmeler:
 tutulması bir süre sonra yük olacak — ama şimdilik iki dilli README'nin
 kendisi bir özellik; **tek dosyaya indirmek kapsam dışı.**
 
-### 8.2 `docs/agents.md`
+### 9.2 `docs/agents.md`
 
 `agents.conf` referansı: format, alanlar, kaçış kuralları, `WORKDIR`,
 yeni agent nasıl eklenir (iki adım: config satırı + varsa
 `src/bin/cachy-agent-usage-<id>`), `--seed`'in neden config'e taşınmadığı.
 
-### 8.3 `docs/usage-schema.md`
+### 9.3 `docs/usage-schema.md`
 
 §6.4'teki tablo; alan sözleşmesi; `ready:false` kayıtlarında `reason`.
 
-### 8.4 `CHANGELOG.md` + `VERSION`
+### 9.4 `CHANGELOG.md` + `VERSION`
 
 0.1.0 → 0.2.0. Girdiler: tek katalog dosyası, `--prefix`, repoya bağlanan
 testler, sahte kolektörlerle network'süz test, CI, gömülü Python'un kaldırılması,
@@ -582,27 +767,20 @@ yanlış vaatlerin düzeltilmesi**.
 
 ---
 
-## 9. Riskler
+## 10. Riskler
 
 | Risk | Etki | Azaltma |
 |---|---|---|
 | `prompt_flag` değerleri gerçek CLI'larla eşleşmiyor (config elle yazıldıysa) | Orta — agent açılmıyor | §5.1 tablosu mevcut koddan birebir çıkarıldı; Faz 1'de her agent `--help` ile doğrulanır. `check` geçersiz bayrak biçimini (ör. `-` ile başlamayan `prompt_flag`) yakalar |
 | `install.sh --prefix` geriye uyumsuzluk yaratır | Düşük | `--prefix` opsiyonel; verilmediğinde **hiçbir yol değişmez**. Test 13 tam olarak bunu doğrular |
 | 6 script'in `cachy-agent-agents` çağrısı yazması, ama `install.sh` bu yeni dosyayı kurmadan eski kurulumda çalışmaz | Orta | `install.sh` `src/bin/*` glob'uyla kopyalar, yeni dosya otomatik gider. Ama **mevcut kurulum kullanıcıda `install.sh` çalıştırmadan bozulur** — CHANGELOG'a "yeniden kurun" notu düşer |
-| Config bozulursa menü boş görünür | Düşük | §5.2: parse hatası exit 1 + stderr; tüketiciler `|| true` ile yutar ama kullanıcı mesajı görür |
+| Config bozulursa menü boş görünür | Düşük | §5.2: config eksik/bozukken **her sorgu exit 1** verir ve stderr'e dosya yolu + satır numarası yazar. Tüketiciler bunu yutmaz — kullanıcı hatayı görür. Test 11 her iki durumu da doğrular |
 | CI'da `systemd-analyze verify` davranışı farklı | Düşük | smoke.sh bu komutun yokluğunda atlar (§7.6) |
 
-## 10. Tanım — Bitti
+## 11. Tanım — Bitti
 
-Bu çalışma şunlar doğrulandığında bitti sayılır:
-
-1. `src/` içinde 8 agent'ın hardcoded listesi **kalmaz** (`grep -rn 'agy claude codex'
-   src/` → 0 eşleşme, `agents.conf` hariç).
-2. `src/` içinde `python3 -c` gömülü komutu **kalmaz**.
-3. `./tests/test.sh` temiz bir checkout'ta, kurulum yapmadan, ağa ve
-   credential'e dokunmadan exit 0 verir.
-4. `README.md` ve `README.tr.md` içinde kodla çelişen hiçbir iddia kalmaz.
-5. `cachy-agent-agents check` geçerli bir config için exit 0, bozuk bir config
-   için exit 1.
-6. CI her push'ta yeşil.
-7. `VERSION` = `0.2.0`, `CHANGELOG.md` gerçek değişiklikleri listeler.
+Bu çalışma **§8.5**'teki on maddede tanımlıdır. `grep` tabanlı maddeler
+(1-2) tek başına yeterli değildir — §8.1, davranış kırıkken hepsinin yeşil
+kalabileceğini gösterir. Asıl ölçüt **test 15'in (argv differential) yeşil
+kalmasıdır**: her agent'ın refactor sonrası ürettiği argv, refactor öncesi
+ölçülen baseline ile birebir aynı olmalıdır.
