@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# git worktree'ler (SDD calisma alani)
+.worktrees/
