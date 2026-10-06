@@ -7,8 +7,15 @@
 # ~/.local/state/cachy-agent/agents/usage/<agent>.json yoluna atomik yazılır.
 # Başarısız kolektör veya kolektörü olmayan agent sessizce atlanır, exit 0 korunur.
 set -u
-# Kolektör dizini test/deneme için ezilebilir (görev 4'ün seam'i).
-BIN_DIR="${CACHY_AGENT_BIN_DIR:-$HOME/.local/bin}"
+# Katalog okuyucu ve koleksiyon dizini AYNI $BIN'den gelir (Ruling 10).
+# systemd --user unit'inin PATH'i login shell'inkinden farklıdır; bare
+# `cachy-agent-agents` çağrısı orada `command not found` (rc 127) veriyor ve
+# `mapfile < <(...)` bunu YUTUYORDU — script rc 0 dönüp sıfır dosya yazıyordu,
+# yani kullanım verisi 15 dakikada bir sessizce ölüyordu. `CACHY_AGENT_BIN_DIR`
+# testler ve denemeler için bu dizini ezer.
+BIN="${CACHY_AGENT_BIN_DIR:-$HOME/.local/bin}"
+BIN_DIR="$BIN"
+AGENTS_BIN="$BIN/cachy-agent-agents"
 OUT_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage"
 
 if [[ $# -gt 0 ]]; then
@@ -22,7 +29,15 @@ else
   # basar ve kullanım verisi sessizce ölür. Sıfır çıktı + exit 0 "her şey yolunda"
   # izlenimi yaratırdı. Tek satırlık journal gürültüsü, kullanıcının verinin
   # neden durduğunu göremesine yeğdir.
-  mapfile -t AGENTS < <(cachy-agent-agents list)
+  #
+  # `mapfile`'in KENDİ exit kodu her zaman 0'dır; asıl sorgunun kodu ayrı
+  # yakalanmalıdır (I-3). Sorgu başarısızsa liste boş kalır, döngü hiç
+  # çalışmaz ve kullanıcı hatayı stderr'dan görmüş olur.
+  ajanlar="$("$AGENTS_BIN" list)" || ajanlar=""
+  # `mapfile <<< ""` TEK bir boş eleman üretir (sıfır değil); döngü bir kez
+  # boş isimle döner. `clean` boş olduğu için `continue` zaten atlar, ama
+  # boş girdide diziyi hiç doldurmamak daha dürüst.
+  if [[ -n "$ajanlar" ]]; then mapfile -t AGENTS <<< "$ajanlar"; fi
 fi
 
 mkdir -p "$OUT_DIR"

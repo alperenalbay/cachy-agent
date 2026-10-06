@@ -55,7 +55,46 @@ for f in "$STATE"/*.json; do
   [[ -e "$f" ]] || break
   if python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f" 2>/dev/null; then n=$((n+1)); else badjson="$badjson$(basename "$f") "; fi
 done
-if [[ $n -ge 3 && -z "$badjson" ]]; then ok "6b $n JSON geçerli"; else bad "6b JSON geçerli" "geçerli=$n bozuk='$badjson' (en az 3 beklenir)"; fi
+if [[ $n -ge 3 && -z "$badjson" ]]; then ok "6b $n JSON geçerli"; else bad "6b JSON geçerli" "geçerli=$n bozuk='$badjson' (en az 3 bekleniyor)"; fi
+
+# 6c. IZLENEN KUME config'in id listesiyle BIREBIR ayni olmali (I-4).
+# 6a boştu: `mapfile` + `continue` katalog tamamen yokken de exit 0 donuyordu,
+# yani hiçbir şey işlenmese de test geçerdi. Burada hem katalog hem de
+# CACHY_AGENT_BIN_DIR sabitlenir; sonuç config'in id kümesiyle karşılaştırılır.
+# İki yönlü: eksik iş ve FAZLA iş ikisi de yakalanır — sadece "sıfır dosya"
+# diye bakmak, koleksiyonu olmayan ajanları sessizce geçerdi.
+SC6=$(mktemp -d)
+mkdir -p "$SC6/coll" "$SC6/state"
+printf 'WORKDIR=~/Projeler\ns1=Sa|-|x|-|-\ns2=Sb|-|x|-|-\ns3=Sc|-|x|-|-\n' > "$SC6/agents.conf"
+# `CACHY_AGENT_BIN_DIR` (Ruling 10) hem katalog okuyucusunun hem de
+# koleksiyonların dizinidir; kurulumda ikisi de ~/.local/bin'de yan yana
+# durur. Testte aynı sepete ikisini de koyuyoruz. Gerçek `cachy-agent-agents`
+# kopyalanır — sahte okuyucu config okuma yolunu test etmezdi.
+cp "$REPO/src/bin/cachy-agent-agents" "$SC6/coll/cachy-agent-agents"
+# Her id için geçerli JSON basan sahte kolektör (gerçek ajan CLI çalışmaz).
+for a in s1 s2 s3; do
+  cat > "$SC6/coll/cachy-agent-usage-$a" <<EOF
+#!/usr/bin/env bash
+printf '{"schemaVersion":1,"id":"$a","name":"$a","updatedAt":"2026-10-06T00:00:00Z","ready":true,"tierLabel":"","limits":[],"todayPrompts":0,"todaySessions":0,"todayTotalTokens":0,"totalPrompts":0,"totalSessions":0,"totalTokens":0}'
+EOF
+  chmod +x "$SC6/coll/cachy-agent-usage-$a"
+done
+# Config'te OLMAYAN ama koleksiyonu OLAN ajan: dosya YAZILMAMALI.
+cat > "$SC6/coll/cachy-agent-usage-gizli" <<'EOF'
+#!/usr/bin/env bash
+printf '{"schemaVersion":1,"id":"gizli","ready":true,"limits":[],"todayPrompts":0,"totalPrompts":0}'
+EOF
+chmod +x "$SC6/coll/cachy-agent-usage-gizli"
+CACHY_AGENT_CONFIG="$SC6/agents.conf" CACHY_AGENT_BIN_DIR="$SC6/coll" XDG_STATE_HOME="$SC6/state" \
+  cachy-agent-usage-update >/dev/null 2>&1; rc=$?
+got6c="$(ls -1 "$SC6/state/cachy-agent/agents/usage" 2>/dev/null | sed 's/\.json$//' | sort | tr '\n' ' ')"
+want6c="s1 s2 s3 "
+if [[ $rc == 0 && "$got6c" == "$want6c" ]]; then
+  ok "6c usage-update config id listesiyle birebir ayni"
+else
+  bad "6c usage-update katalog" "rc=$rc got='$got6c' bekleniyordu='$want6c'"
+fi
+rm -rf "$SC6"
 
 # 7. cachy-agent usage exit 0
 if cachy-agent usage >/dev/null 2>&1; then ok "7 usage exit 0"; else bad "7 usage exit 0" "exit=$?"; fi
@@ -81,17 +120,16 @@ if [[ $rc == 0 && -z "$dv" ]]; then ok "9 desktop-file-validate"; else bad "9 de
 # menü config'e bağlandığı için `cachy-agent-agents` bulunabilmeli ve katalog
 # sabitlenmelidir — aksi halde test kullanıcının kendi config'ine bakar.
 #
-# Menü kardeş binary'leri `$HOME/.local/bin` ÜZERİNDEN mutlak yolla çağırır
-# (desktop entry'den çalışıyor, PATH'e güvenemez). Tek `BIN_DIR` sabitinden
-# geldikleri için test tek sed ile hepsini stub dizinine çevirir — bare adla
-# çağırsalardı PATH'e bir stub koymak yetmezdi, mutlak yol oraya bakmazdı.
+# Menü (ve open/install/usage-update) kardeş binary'leri PATH'e bakmaz;
+# `BIN="${CACHY_AGENT_BIN_DIR:-$HOME/.local/bin}"` üzerinden çözerler
+# (Ruling 10 — desktop entry ve systemd --user unit'inde PATH'e güvenilemez).
+# Bu yüzden harness yol GÖMMEZ, `$STUB`'u `CACHY_AGENT_BIN_DIR` ile export
+# eder: tek `sed` yerine tek `export`, dört çağıranın hepsi için.
 STUB=$(mktemp -d)
 cp "$REPO/src/bin/cachy-agent-menu" "$STUB/menu-test"
 sed -i "s|/usr/bin/alacritty|$STUB/alacritty|g" "$STUB/menu-test"
-sed -i "s|\"\\\$HOME/.local/bin|\"$STUB|g" "$STUB/menu-test"
-# Menü katalog okuyucusunu da stub dizinine koy: mutlak yolla çağırdığı için
-# PATH'e bırakılan kopya ona ulaşmaz. Gerçek `cachy-agent-agents` — sahte
-# değil, çünkü testin konusu tam olarak config okuma yolu.
+# Katalog okuyucusu GERÇEK cachy-agent-agents: sahte bir okuyucu testin
+# konusunu (config okuma yolu) test etmezdi.
 cp "$REPO/src/bin/cachy-agent-agents" "$STUB/cachy-agent-agents"
 # fuzzel stub'ı stdin'deki MENÜ LİSTESİNİ de kaydeder. Bu, listenin kaynağını
 # doğrudan kanıtlar: `list` config'ten gelmiyorsa burada görünmez.
@@ -131,6 +169,10 @@ chmod +x "$STUB/fuzzel" "$STUB/alacritty" "$STUB/cachy-agent-install" "$STUB/cac
 export STUB_LOG="$STUB/calls.log"
 export STUB_MENU="$STUB/menu.txt"
 export PATH="$STUB:$PATH"
+# Ruling 10 seam'i: menü/open/install/usage-update kardeş binary'leri BURADAN
+# çözer. `PATH`'e de ekleniyor çünkü 10l `cachy-agent-agents`'i test 11'de
+# olduğu gibi bare adla çağıracak.
+export CACHY_AGENT_BIN_DIR="$STUB"
 export CACHY_AGENT_CONFIG="$REPO/tests/fixtures/agents-valid.conf"
 
 # 10a. "+ x (kur)" -> install çağrısı
@@ -232,7 +274,87 @@ else
   bad "10i menu eksik config" "exit=$rc (0 sessiz kapanma, sifirdan farkli bekleniyordu) stderr='$err'"
 fi
 
+# --- 10j/10k/10l: MENÜNÜN ÖTESİNDEKİ GERÇEK SCRIPT'LER ---
+# 10a-10i alacritty stub'ında duruyordu (argv kaydeder, `-e` sonrasını
+# ÇALIŞTIRMAZ). Bu yüzden onay sıralaması, `bash -c` çalıştırması ve login
+# ipucu tablosu hiç sınanmıyordu. Aşağıdaki üç test o üç riskli yeniden
+# yazımı DOĞRUDAN çalıştırır.
+#
+# Gerçek script'ler çalıştığı için `cachy-agent` burada HER ZAMAN BAŞARISIZ
+# olan bir stub'dır (başarılı olsaydı `cachy-agent-open` ipucu yoluna hiç
+# gelmezdi). Kurulum komutu da asla çalıştırılmaz: 10j/10k her ikisi de
+# `bash -c`'den ÖNCE çıkıyor.
+cp "$REPO/src/bin/cachy-agent-install" "$STUB/install-test"
+cp "$REPO/src/bin/cachy-agent-open" "$STUB/open-test"
+cat > "$STUB/cachy-agent" <<'EOF'
+#!/usr/bin/env bash
+# open'in hata yoluna düşmesi için: daima başarısız.
+exit 7
+EOF
+chmod +x "$STUB/cachy-agent"
+
+# 10j. I-1: TTY YOKKEN onay sorulmadan kurulum calismamali.
+# İKİ kolu var; ikisi de aynı bulguyu farklı yerden sınıyor.
+#
+# (a) onay SIRASI (brief kuralı): bilinmeyen ad kullanıcıya hiç sorulmaz.
+#     `uydurma` config'de yok -> `get` exit 1. 'Devam?' stdout'ta olmamalı.
+#
+# (b) I-1'in kendisi: config GEÇERLİ bir ajan + TTY YOK. v0.1.0'te
+#     `read ... || true` EOF'u yutup `ans` boş kalınca kontrol düşüyor ve
+#     kurulum SORULMADAN `bash -c` ile çalışıyordu. Burada `install` alanı
+#     yalnızca `echo` (gerçek kurulum komutu DEĞİL, ağ/npm/curl yok) ve
+#     bir marker dosyasına yazıyor; marker OLUŞMAMALI.
+printf 'WORKDIR=~/Projeler\nkurulacak=Sahte Ajan|echo CALISTI > %s/marker.txt|-|--prompt|-\n' "$STUB" > "$STUB/tty.conf"
+rm -f "$STUB/marker.txt"
+out=$(CACHY_AGENT_CONFIG="$STUB/tty.conf" bash "$STUB/install-test" kurulacak </dev/null 2>&1); rc=$?
+if [[ $rc -eq 1 ]] && [[ "$out" != *"Devam?"* ]] && [[ ! -e "$STUB/marker.txt" ]]; then
+  ok "10j install: TTY yoksa onay almadan kurulmaz (kurulum hic calismadi)"
+else
+  bad "10j install TTY/onay" "rc=$rc (1 bekleniyordu) marker=$([ -e "$STUB/marker.txt" ] && echo VAR-KURULDU || echo yok) out='$out'"
+fi
+
+# (a) onay sirasi: bilinmeyen ad sorulmaz
+out=$(CACHY_AGENT_CONFIG="$STUB/unknown.conf" bash "$STUB/install-test" uydurma </dev/null 2>&1); rc=$?
+if [[ $rc -eq 1 ]] && [[ "$out" != *"Devam?"* ]]; then
+  ok "10j-b install: bilinmeyen ad onay sorulmadan reddedilir"
+else
+  bad "10j-b install onay sirasi" "rc=$rc (1 bekleniyordu) out='$out'"
+fi
+
+# 10k. Harici ajan (install '-') -> otomatik kurulum yok, rc 1, onay YOK.
+printf 'WORKDIR=~/Projeler\nharici=Harici Ajan|-|x|-|-\n' > "$STUB/harici.conf"
+out=$(CACHY_AGENT_CONFIG="$STUB/harici.conf" bash "$STUB/install-test" harici </dev/null 2>&1); rc=$?
+if [[ $rc -eq 1 ]] && [[ "$out" == *"otomatik kurulum yok"* ]] && [[ "$out" != *"Devam?"* ]]; then
+  ok "10k install: harici ajan reddedilir, onay sorulmaz"
+else
+  bad "10k install harici ajan" "rc=$rc (1 bekleniyordu) out='$out'"
+fi
+
+# 10l. Login ipucu config'in `login` alanindan gelir — HER id icin.
+# Beklenen deger fixture'dan ALINIR, script'e gomulmez; boylece tablo
+# config ile birlikte degisirse test degisimi de yakalar.
+l_hata=""; l_n=0
+for a in $("$REPO/src/bin/cachy-agent-agents" list 2>/dev/null); do
+  l_n=$((l_n+1))
+  want="$("$REPO/src/bin/cachy-agent-agents" get "$a" login 2>/dev/null)"
+  got=$(CACHY_AGENT_CONFIG="$REPO/tests/fixtures/agents-valid.conf" bash "$STUB/open-test" "$a" </dev/null 2>&1 | grep 'Sonraki adım:')
+  if [[ "$want" == "-" ]]; then
+    okg="Sonraki adım: 'cachy-agent --inline $a' ile manuel dene"
+  else
+    okg="Sonraki adım: terminalde '$want' ile giriş yap"
+  fi
+  if [[ "$got" != "$okg" ]]; then
+    l_hata="$l_hata[$a] got='$got' bekleniyordu='$okg'; "
+  fi
+done
+if [[ $l_n -eq 8 && -z "$l_hata" ]]; then
+  ok "10l open: 8 ajanin login ipucu config'ten"
+else
+  bad "10l open login ipucu" "ajan=$l_n (8 bekleniyordu) hata=$l_hata"
+fi
+
 unset CACHY_AGENT_CONFIG
+unset CACHY_AGENT_BIN_DIR
 rm -rf "$STUB"
 
 # 11. agents.conf parse + check

@@ -4,20 +4,33 @@
 # Hata olursa pencereyi kapatmadan sebebi + sonraki adımı gösterir.
 # Agent adı ve giriş ipucu agents.conf'tan gelir (bilinenler: cachy-agent-agents ids).
 set -euo pipefail
+# Katalog okuyucu PATH'e BAKILMAZ: bu script alacritty içinde, systemd ya da
+# kısayola bağlı bir süreçten çağrılabilir ve ~/.local/bin PATH'te olmayabilir
+# (Ruling 10). Aynı $BIN değişkeni `CACHY_AGENT_BIN_DIR` ile ezilebilir.
+BIN="${CACHY_AGENT_BIN_DIR:-$HOME/.local/bin}"
+AGENTS_BIN="$BIN/cachy-agent-agents"
 AGENT="${1:-}"; shift || true
-if ! cachy-agent-agents known "$AGENT" 2>/dev/null; then
+# `known` üç farklı sebebi exit 1 ile özetler: id katalogda yok / config eksik /
+# config bozuk. stderr'i yutmak bunları tek bir "bilinmeyen agent" cümlesine
+# indirgiyordu — kullanıcı çalışan ajanının var olmadığını sanıyordu.
+# Bu yüzden stderr YUTULMAZ, ama yalnızca KENDİ cümlemizi TEKRARLAMADIĞI
+# durumda basılır: "bilinmeyen agent" içeren stderr zaten bizim cümlemizin
+# aynısıdır, ikinci kez yazdırmak gürültüdür.
+known_err="" known_rc=0
+known_err="$("$AGENTS_BIN" known "$AGENT" 2>&1 >/dev/null)" || known_rc=$?
+if [[ $known_rc -ne 0 ]]; then
+  if [[ -n "$known_err" && "$known_err" != *"bilinmeyen agent"* ]]; then
+    printf '%s\n' "$known_err" >&2
+  fi
   echo "bilinmeyen agent: $AGENT" >&2; exit 1
 fi
 code=0
-if [[ $# -gt 0 ]]; then cachy-agent --seed "$AGENT" "$@" || code=$?; else cachy-agent --inline "$AGENT" || code=$?; fi
+if [[ $# -gt 0 ]]; then "$BIN/cachy-agent" --seed "$AGENT" "$@" || code=$?; else "$BIN/cachy-agent" --inline "$AGENT" || code=$?; fi
 if [[ $code -eq 0 ]]; then exit 0; fi
 # Config'teki `login` alanı ipucu metninin kendisidir (bir ajanın `login`
 # komutu + argümanları). Burada hiçbir ajan adı geçmez.
 # `-` (veya boş) ise ajanın girişe ihtiyacı yoktur -> genel ipucu.
-# Aynı dosyada iki farklı çağrı yolu karışmasın diye burada da BARE ad
-# kullanılır (`known` çağrısıyla aynı). Mutlak `$HOME/.local/bin/...` yolu
-# yalnızca QML gibi PATH'e bakmayan tüketicilerde gerekir.
-login="$(cachy-agent-agents get "$AGENT" login 2>/dev/null || true)"
+login="$("$AGENTS_BIN" get "$AGENT" login 2>/dev/null || true)"
 if [[ -z "$login" || "$login" == "-" ]]; then
   hint="'cachy-agent --inline $AGENT' ile manuel dene"
 else
