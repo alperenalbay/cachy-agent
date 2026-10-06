@@ -68,6 +68,7 @@ case "$cmd" in
       echo "bilinmeyen agent: $sel ($(cachy-agent-agents ids))" >&2; exit 1
     fi
     if [[ "${CACHY_AGENT_TERMINAL:-0}" == "1" ]]; then
+      # shellcheck disable=SC2016  # $0/$1 ic bash'e gecmeli
       exec alacritty --class CachyAgent -e bash -c '"$0" --inline "$1"; exec fish' "$0" "$sel"
     fi
     run_agent "$sel"
@@ -104,7 +105,18 @@ case "$cmd" in
       PROG=$(echo "${2:-}" | tr -cd 'A-Za-z0-9._-'); MODE="${3:-on}"
       mkdir -p "$CONFIG_DIR/mute"
       case "$MODE" in
-        on) [[ -n "$PROG" ]] && touch "$CONFIG_DIR/mute/$PROG" && echo "muted: $PROG" || { echo "kullanım: cachy-agent crash mute <program> [on|off]" >&2; exit 1; } ;;
+        on)
+          # `A && B || C` zinciri BURADA yanlış gerekçe veriyordu: PROG geçerli
+          # ama `touch` yetki/salt-okunur dizin yüzünden başarısız olduğunda da
+          # C (kullanım hatası) çalışıyordu. İki hata da exit 1 döner ama
+          # sebebi farklıdır; if/else dalları ne olduklarını söyler.
+          if [[ -z "$PROG" ]]; then
+            echo "kullanım: cachy-agent crash mute <program> [on|off]" >&2; exit 1
+          elif ! touch "$CONFIG_DIR/mute/$PROG"; then
+            echo "susturulamadı: $PROG ($CONFIG_DIR/mute yazılamıyor)" >&2; exit 1
+          else
+            echo "muted: $PROG"
+          fi ;;
         off) rm -f "$CONFIG_DIR/mute/$PROG" && echo "unmuted: $PROG" ;;
         *) echo "kullanım: cachy-agent crash mute <program> [on|off]" >&2; exit 1 ;;
       esac

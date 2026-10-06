@@ -1,31 +1,31 @@
 #!/usr/bin/env bash
 # cachy-agent-install <name> - eksik agent CLI'yi resmi yoluyla kurar
+# Kurulum komutu agents.conf'un `install` alanından gelir; "-" ise harici
+# kurulumdur (bu script kurmaz). Config: cachy-agent-agents get <id> install.
 set -euo pipefail
 NAME="${1:-}"
-case "$NAME" in
-  claude|codex|crush|copilot|cursor-agent|grok) ;;
-  *) echo "bilinmeyen agent: $NAME" >&2; exit 1 ;;
-esac
-read -rp "$NAME kurulacak (opencode/agy hariç harici kurulum). Devam? [E/h] " ans || true
+# Sorgu ONAYDAN ÖNCE yapılır: v0.1.0'de bilinmeyen ad `case` ile anında
+# "bilinmeyen agent" + exit 1 veriyordu, kullanıcıya hiç soru sorulmadan.
+# Sorgu onaydan sonraya kalırsa `cachy-agent-install uydurma` önce
+# "uydurma kurulacak... Devam?" diye sorup SONRA reddediyordu — bu bir davranış
+# gerilemesi. `get` bilinmeyen id'de exit 1 + stderr verir; `set -e` de
+# `NAME`'i hiç kullanılmadan çıkmamıza izin verir (eskiden `case` aynı işi
+# yapıyordu, yani mesaj biçimi dışında davranış aynı).
+cmd="$(cachy-agent-agents get "$NAME" install)"
+if [[ -z "$cmd" || "$cmd" == "-" ]]; then
+  echo "$NAME için otomatik kurulum yok (harici kurulum)" >&2; exit 1
+fi
+read -rp "$NAME kurulacak (harici kurulum). Devam? [E/h] " ans || true
 [[ "${ans:-}" =~ ^[HhnN] ]] && echo "Vazgeçildi." && exit 0
-case "$NAME" in
-  claude) npm i -g @anthropic-ai/claude-code ;;
-  codex) npm i -g @openai/codex ;;
-  crush) npm i -g @charmlabs/crush ;;
-  copilot) npm i -g @github/copilot ;;
-  cursor-agent) curl https://cursor.com/install -fsS | bash ;;
-  grok) curl -fsSL https://x.ai/cli/install.sh | bash ;;
-  *) echo "bilinmeyen agent: $NAME" >&2; exit 1 ;;
-esac
+# ~ ve $HOME genişletmesi kurulum komutunun kendi bash'ine bırakılır.
+bash -c "$cmd"
 if command -v "$NAME" >/dev/null 2>&1; then
   echo "OK: $NAME kuruldu."
-  case "$NAME" in
-    claude) echo "Son adım: terminalde 'claude login' ile giriş yap." ;;
-    codex) echo "Son adım: terminalde 'codex login' ile giriş yap." ;;
-    copilot) echo "Son adım: terminalde 'copilot login' ile giriş yap." ;;
-    cursor-agent) echo "Son adım: terminalde 'agent login' ile giriş yap." ;;
-    grok) echo "Son adım: terminalde 'grok login' ile giriş yap." ;;
-  esac
+  # `login` "-" ise giriş adımı yok -> bu satır atlanır.
+  login="$(cachy-agent-agents get "$NAME" login)"
+  if [[ -n "$login" && "$login" != "-" ]]; then
+    echo "Son adım: terminalde '$login' ile giriş yap."
+  fi
   exec cachy-agent --inline "$NAME"
 else
   echo "Kurulum tamamlanamadı ($NAME bulunamadı). Çıktıdaki hataya bak." >&2

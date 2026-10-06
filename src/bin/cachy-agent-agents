@@ -179,6 +179,7 @@ check_config() {
       perr "$ln" "login boş bırakılmış; okuma yolunda '-' sayıldı ama '-' yazman gerekir"; bad=1
     fi
     # json çıktısı için görünen_ad kaçışsız ve kontrol karakteri içermemeli
+    # shellcheck disable=SC1003  # mesajda tek tırnaklı 'literal' gösteriliyor
     if [[ "$name" == *'"'* || "$name" == *'\'* ]]; then
       perr "$ln" "görünen_ad içinde '\"' veya '\\' olamaz (json çıktısı bozulur)"; bad=1
     fi

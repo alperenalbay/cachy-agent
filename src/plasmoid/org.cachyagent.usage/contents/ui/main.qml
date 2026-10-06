@@ -30,7 +30,8 @@ PlasmoidItem {
 
     property string updateCommand: "__HOME__/.local/bin/cachy-agent-usage-update"
     property string installBase: "/usr/bin/alacritty --class CachyAgent -e __HOME__/.local/bin/cachy-agent-install "
-    property string catalogCommand: "python3 -c 'import json, subprocess; A=[\"opencode\",\"agy\",\"claude\",\"codex\",\"crush\",\"copilot\",\"cursor-agent\",\"grok\"]; print(json.dumps({\"catalog\": [{\"id\": a, \"installed\": subprocess.call(\"command -v \" + a + \" >/dev/null 2>&1\", shell=True) == 0} for a in A]}))'"
+    // Katalog agents.conf'tan gelir: {"catalog":[{"id","name","installed","external"}]}
+    property string catalogCommand: "__HOME__/.local/bin/cachy-agent-agents json"
     property string fetchCommand: "python3 -c 'import json, glob, os; F=sorted(glob.glob(os.path.expanduser(\"~/.local/state/cachy-agent/agents/usage/*.json\"))); P=[{\"id\": str(d.get(\"id\", os.path.basename(p)[:-5])), \"name\": str(d.get(\"name\", d.get(\"id\", os.path.basename(p)[:-5]))), \"today\": int(d.get(\"todayPrompts\") or 0), \"total\": int(d.get(\"totalPrompts\") or 0), \"limits\": [{\"label\": str(x.get(\"label\", \"\")), \"percent\": float(x.get(\"percent\", 0) or 0), \"resetsAt\": str(x.get(\"resetsAt\", \"\"))} for x in (d.get(\"limits\") or [])]} for p, d in [(p, json.load(open(p))) for p in F]]; print(json.dumps({\"providers\": P, \"alarm\": any(l[\"percent\"] >= 0.9 for pr in P for l in pr[\"limits\"])}))'"
 
     Plasma5Support.DataSource {

@@ -1,14 +1,44 @@
 #!/usr/bin/env bash
 # cachy-agent-menu - fuzzel picker -> alacritty agent terminal
 # fuzzel yoksa eski metin prompt'a düşer (kısayol hep çalışır)
+# Agent listesi TEK kaynaktan gelir: cachy-agent-agents list (agents.conf).
+# Burada hiçbir agent adı sabit yazılı değildir.
+#
+# BU SCRIPT KABUKTAN DEĞİL desktop entry'den (bkz. cachy-agent.desktop
+# Exec=__HOME__/.local/bin/cachy-agent-menu) çalışır; KDE'nin başlattığı
+# süreçte PATH'in `~/.local/bin` içerdiği garanti DEĞİLDİR. Bu yüzden kardeş
+# binary'ler bare adla değil, mutlak $BIN_DIR yoluyla çağrılır — v0.1.0'de de
+# böyleydi, davranış korunur. Tek değişiklik: yol artık üç ayrı yerde
+# yazılmıyor, tek `BIN_DIR` sabitinden geliyor (test de tek sed ile geçirir).
 set -euo pipefail
-AGENT_BIN="$HOME/.local/bin/cachy-agent"
+BIN_DIR="$HOME/.local/bin"
+AGENT_BIN="$BIN_DIR/cachy-agent"
+AGENTS_BIN="$BIN_DIR/cachy-agent-agents"
 if command -v fuzzel >/dev/null 2>&1; then
   installed=()
   missing=()
-  for a in opencode agy claude codex crush copilot cursor-agent grok; do
+  # Liste TEK kez okunur. İki ayrı `list` çağrısı (biri döngüye, biri "boş mu"
+  # kontrolüne) config bozukken aynı hatayı stderr'a İKİ kez basardı.
+  # Sorgunun exit kodu `list`'in kendisindendir. `set -e` altında düz
+  # `ajanlar="$(...)"` başarısızlıkta kabuğu ÖLDÜRÜRDÜ ve `liste_rc` hiç
+  # okunamazdı; `&& ... || ...` zinciri hem atlamayı hem kodu güvenle almayı
+  # sağlar (&&/|| listesinde `set -e` tetiklenmez).
+  ajanlar="$("$AGENTS_BIN" list)" && liste_rc=0 || liste_rc=$?
+  if [[ $liste_rc -ne 0 ]]; then
+    # v0.1.0'de imkânsızdı (sabit liste vardı). Config'e bağlandıktan sonra
+    # config eksik/bozuksa buraya düşer; v0.1.0'deki "sessizce boş menü"
+    # davranışı kullanıcıya hiçbir sebep göstermeden pencereyi kapatıyordu.
+    # `cachy-agent-agents` tanı mesajını zaten stderr'a bastı; tek satır daha
+    # ekliyoruz ve ne yapılacağını söylüyoruz.
+    echo "cachy-agent-menu: agent listesi alınamadı (config: ${CACHY_AGENT_CONFIG:-$HOME/.config/cachy-agent/agents.conf})" >&2
+    exit 1
+  fi
+  while IFS= read -r a; do
+    [[ -n "$a" ]] || continue
     if command -v "$a" >/dev/null 2>&1; then installed+=("$a"); else missing+=("$a"); fi
-  done
+  done <<< "$ajanlar"
+  # Config geçerli ama hiç agent satırı yoksa menü boş kalır (v0.1.0'de de
+  # öyleydi: kullanıcı config'ini boşaltırsa menü açılmaz, hata da yoktur).
   [[ ${#installed[@]} -eq 0 && ${#missing[@]} -eq 0 ]] && exit 0
   list=$(printf '%s\n' "${installed[@]}")
   if [[ ${#installed[@]} -gt 0 ]]; then
@@ -25,18 +55,22 @@ if command -v fuzzel >/dev/null 2>&1; then
     ─*) exit 0 ;;
     "★ "*)
       name=$(echo "$sel" | sed 's/^★ //; s/ (varsayılan yap)$//')
-      case "$name" in opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ;; *) exit 0 ;; esac
-      "$HOME/.local/bin/cachy-agent" default "$name" >/dev/null
+      # fuzzel satırdan sökülen bu bir id olmak ZORUNDA; config'te yoksa
+      # menü kapatılır (eskiden sabit `case` listesi vardı).
+      "$AGENTS_BIN" known "$name" 2>/dev/null || exit 0
+      "$AGENT_BIN" default "$name" >/dev/null
       if command -v notify-send >/dev/null 2>&1; then notify-send "cachyAgent" "Varsayılan agent: $name"; fi
       exit 0
       ;;
     "+ "*)
       name=$(echo "$sel" | sed 's/^+ //; s/ (kur)$//')
-      case "$name" in opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ;; *) exit 0 ;; esac
-      exec /usr/bin/alacritty --class CachyAgent -e "$HOME/.local/bin/cachy-agent-install" "$name"
+      "$AGENTS_BIN" known "$name" 2>/dev/null || exit 0
+      exec /usr/bin/alacritty --class CachyAgent -e "$BIN_DIR/cachy-agent-install" "$name"
       ;;
-    opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ;;
-    *) exit 0 ;;
+    *)
+      # Düz satır: id config'te yoksa sessizce çık, varsa -open'e devret.
+      "$AGENTS_BIN" known "$sel" 2>/dev/null || exit 0
+      ;;
   esac
   exec /usr/bin/alacritty --class CachyAgent -e "$AGENT_BIN-open" "$sel"
 else

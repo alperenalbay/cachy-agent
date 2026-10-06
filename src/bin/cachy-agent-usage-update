@@ -1,23 +1,32 @@
 #!/usr/bin/env bash
 # cachy-agent-usage-update - kullanım kolektörleri orkestratörü
 # Kullanım: cachy-agent-usage-update [agent...]
-# Argümansız: opencode agy claude codex crush copilot cursor-agent grok. Verilirse sadece onları çalıştır.
+# Argümansız: agents.conf'taki TÜM agentlar (cachy-agent-agents list).
+# Verilirse sadece onları çalıştırır.
 # Her kolektör (timeout 30) stdout JSON'u doğrulanıp
 # ~/.local/state/cachy-agent/agents/usage/<agent>.json yoluna atomik yazılır.
 # Başarısız kolektör veya kolektörü olmayan agent sessizce atlanır, exit 0 korunur.
 set -u
-BIN_DIR="$HOME/.local/bin"
+# Kolektör dizini test/deneme için ezilebilir (görev 4'ün seam'i).
+BIN_DIR="${CACHY_AGENT_BIN_DIR:-$HOME/.local/bin}"
 OUT_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage"
 
 if [[ $# -gt 0 ]]; then
   AGENTS=("$@")
 else
-  AGENTS=(opencode agy claude codex crush copilot cursor-agent grok)
+  # Config okunamazsa liste boş gelir -> döngü hiç çalışmaz, exit 0 korunur
+  # ("sessizce atla" davranışı değişmez).
+  #
+  # stderr BURADA KASTEN SUSTURULMAZ. Bu script systemd timer ile 15 dakikada
+  # bir çalışır; config bozuksa `cachy-agent-agents` tek satır hatayı stderr'a
+  # basar ve kullanım verisi sessizce ölür. Sıfır çıktı + exit 0 "her şey yolunda"
+  # izlenimi yaratırdı. Tek satırlık journal gürültüsü, kullanıcının verinin
+  # neden durduğunu göremesine yeğdir.
+  mapfile -t AGENTS < <(cachy-agent-agents list)
 fi
 
 mkdir -p "$OUT_DIR"
 
-rc=0
 for agent in "${AGENTS[@]}"; do
   # Sadeleştir: yol traversal engelle
   clean="$(printf '%s' "$agent" | tr -cd 'A-Za-z0-9_-')"

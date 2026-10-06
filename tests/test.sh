@@ -77,13 +77,33 @@ dv=$(desktop-file-validate "$d1" "$d2" 2>&1); rc=$?
 if [[ $rc == 0 && -z "$dv" ]]; then ok "9 desktop-file-validate"; else bad "9 desktop-file-validate" "exit=$rc out='$dv'"; fi
 
 # 10. menu seçim mantığı (stub fuzzel/alacritty/install — gerçek çalıştırma yok)
+# Artık ÇALIŞMA AĞACININ menüsü sınanır (kurulu ~/.local/bin kopyası değil):
+# menü config'e bağlandığı için `cachy-agent-agents` bulunabilmeli ve katalog
+# sabitlenmelidir — aksi halde test kullanıcının kendi config'ine bakar.
+#
+# Menü kardeş binary'leri `$HOME/.local/bin` ÜZERİNDEN mutlak yolla çağırır
+# (desktop entry'den çalışıyor, PATH'e güvenemez). Tek `BIN_DIR` sabitinden
+# geldikleri için test tek sed ile hepsini stub dizinine çevirir — bare adla
+# çağırsalardı PATH'e bir stub koymak yetmezdi, mutlak yol oraya bakmazdı.
 STUB=$(mktemp -d)
-cp "$BIN/cachy-agent-menu" "$STUB/menu-test"
-sed -i "s|/usr/bin/alacritty|$STUB/alacritty|g; s|$BIN/cachy-agent-install|$STUB/cachy-agent-install|g" "$STUB/menu-test"
+cp "$REPO/src/bin/cachy-agent-menu" "$STUB/menu-test"
+sed -i "s|/usr/bin/alacritty|$STUB/alacritty|g" "$STUB/menu-test"
+sed -i "s|\"\\\$HOME/.local/bin|\"$STUB|g" "$STUB/menu-test"
+# Menü katalog okuyucusunu da stub dizinine koy: mutlak yolla çağırdığı için
+# PATH'e bırakılan kopya ona ulaşmaz. Gerçek `cachy-agent-agents` — sahte
+# değil, çünkü testin konusu tam olarak config okuma yolu.
+cp "$REPO/src/bin/cachy-agent-agents" "$STUB/cachy-agent-agents"
+# fuzzel stub'ı stdin'deki MENÜ LİSTESİNİ de kaydeder. Bu, listenin kaynağını
+# doğrudan kanıtlar: `list` config'ten gelmiyorsa burada görünmez.
 cat > "$STUB/fuzzel" <<'EOF'
 #!/usr/bin/env bash
+cat > "$STUB_MENU"
 printf '%s' "$FAKE_SEL"
 EOF
+# alacritty stub'ı YALNIZCA kendisine verilen argv'yi kaydeder, `-e` sonrasını
+# çalıştırmaz. Bu yüzden "install CALLED" diye bir iz YOKTUR ve olmamalıdır:
+# test, menünün hangi komutu hangi argümanla başlattığını argv üzerinden
+# sınar. (Eski 10g bu stub'ın asla üretemediği bir dizgiyi arıyordu.)
 cat > "$STUB/alacritty" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >> "$STUB_LOG"
@@ -94,9 +114,24 @@ cat > "$STUB/cachy-agent-install" <<'EOF'
 echo "INSTALL CALLED: $*" >> "$STUB_LOG"
 exit 0
 EOF
-chmod +x "$STUB/fuzzel" "$STUB/alacritty" "$STUB/cachy-agent-install"
+# '★ ... (varsayılan yap)' dalı `cachy-agent default` çağırır ve notify-send
+# yolunu dener; ikisi de stub'lanır ki test gerçek varsayılan agent'ı DEĞİŞTİRMEYİ
+# ve kullanıcıya bildirim GÖNDERMEYİ (assert sırasında olsa da görsel gürültü).
+cat > "$STUB/cachy-agent" <<'EOF'
+#!/usr/bin/env bash
+printf 'DEFAULT CALLED: %s\n' "$*" >> "$STUB_LOG"
+exit 0
+EOF
+cat > "$STUB/notify-send" <<'EOF'
+#!/usr/bin/env bash
+printf 'NOTIFY: %s\n' "$*" >> "$STUB_LOG"
+exit 0
+EOF
+chmod +x "$STUB/fuzzel" "$STUB/alacritty" "$STUB/cachy-agent-install" "$STUB/cachy-agent" "$STUB/notify-send"
 export STUB_LOG="$STUB/calls.log"
+export STUB_MENU="$STUB/menu.txt"
 export PATH="$STUB:$PATH"
+export CACHY_AGENT_CONFIG="$REPO/tests/fixtures/agents-valid.conf"
 
 # 10a. "+ x (kur)" -> install çağrısı
 : > "$STUB_LOG"
@@ -107,6 +142,97 @@ if grep -q "cachy-agent-install" "$STUB_LOG" && grep -q "codex" "$STUB_LOG"; the
 : > "$STUB_LOG"
 FAKE_SEL="──────────────────" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
 if [[ $rc == 0 && ! -s "$STUB_LOG" ]]; then ok "10b menu ayraç yoksayılır"; else bad "10b menu ayraç" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
+
+# 10c. düz agent satırı -> `cachy-agent-open` (config'de tanımlı olmalı)
+: > "$STUB_LOG"
+FAKE_SEL="codex" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+if [[ $rc == 0 ]] && grep -q 'cachy-agent-open' "$STUB_LOG" && grep -qx 'codex' "$STUB_LOG"; then
+  ok "10c menu düz ad -> -open"
+else bad "10c menu düz ad" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
+
+# 10d. "★ x (varsayılan yap)" -> `cachy-agent default x` (stub'lanır, gerçek
+# varsayılan agent değişmez)
+: > "$STUB_LOG"
+FAKE_SEL="★ codex (varsayılan yap)" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+if [[ $rc == 0 ]] && grep -q 'DEFAULT CALLED: default codex' "$STUB_LOG"; then
+  ok "10d menu '★ x' -> default x"
+else bad "10d menu '★ x'" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
+
+# 10e. CONFIG'DE OLMAYAN ad -> hicbir komut çağrılmaz, sessiz exit 0.
+# Eski sabit `case` listesi yerine `known` konduğu için bu, listeden
+# kaldırılmış/kataloğa hiç girmemiş bir ajanın menüye sızamamasını kilitler.
+: > "$STUB_LOG"
+FAKE_SEL="uydurma" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+if [[ $rc == 0 && ! -s "$STUB_LOG" ]]; then ok "10e menu bilinmeyen ad reddedilir"; else bad "10e menu bilinmeyen ad" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
+
+# 10f. "★ " dalında config'de olmayan ad -> default ÇAĞRILMAZ
+: > "$STUB_LOG"
+FAKE_SEL="★ uydurma (varsayılan yap)" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+if [[ $rc == 0 && ! -s "$STUB_LOG" ]]; then ok "10f menu '★ bilinmeyen' reddedilir"; else bad "10f menu '★ bilinmeyen'" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
+
+# 10g. TEK AYIRT EDİCİ TEST: listenin kaynağı config'tir, sabit literal değil.
+#
+# 10a'nın kör noktası: `codex` sabit listede de var, bu yüzden 10a hem sabit
+# liste hem config listesiyle GEÇER — hiçbir şey ayırt etmez. Burada config'e
+# YALNIZCA config-only bir id (`ozel`) konur ve iddialar üç ayrı yere bakar:
+#
+#   (a) MENÜ LİSTESİ (fuzzel'in stdin'i) `+ ozel (kur)` satırını İÇERİR.
+#       Bu listenin `cachy-agent-agents list`'ten geldiğinin doğrudan kanıtı:
+#       sabit liste geri gelse `ozel` listede hiç görünmezdi.
+#   (b) Aynı listede sabit 8 isimden HİÇBİRİ yoktur. Sabit liste `ozel`'in
+#       yanına eklenmiş olsaydı (ya da sabit liste geri geldiyse) bu kırılır.
+#   (c) Seçim `+ ozel (kur)` alacritty'yi `cachy-agent-install ozel` ile
+#       başlatır — alacritty stub'ı YALNIZCA argv'yi kaydeder, `-e` sonrasını
+#       çalıştırmaz; bu yüzden "INSTALL CALLED" değil ARGV aranır.
+#
+# (a)+(b) birlikte "sabit liste geri gelirse kırmızı" kanıtıdır.
+cat > "$STUB/ozel.conf" <<'EOF'
+WORKDIR=~/Projeler
+ozel=Özel Ajansı|npm i -g ozel|--yolo|--prompt|ozel login
+EOF
+: > "$STUB_LOG"; : > "$STUB_MENU"
+CACHY_AGENT_CONFIG="$STUB/ozel.conf" FAKE_SEL="+ ozel (kur)" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+menu_txt="$(cat "$STUB_MENU" 2>/dev/null || echo BOŞ)"
+g_sabit_yok=1
+for a in opencode agy claude codex crush copilot cursor-agent grok; do
+  if grep -q "$a" "$STUB_MENU" 2>/dev/null; then g_sabit_yok=0; fi
+done
+if [[ $rc == 0 ]] \
+   && grep -qx '+ ozel (kur)' "$STUB_MENU" \
+   && [[ $g_sabit_yok -eq 1 ]] \
+   && grep -q 'cachy-agent-install' "$STUB_LOG" \
+   && grep -qx 'ozel' "$STUB_LOG"; then
+  ok "10g menu listesi config'ten (config-only id tanindi, sabit isim yok)"
+else
+  bad "10g menu config-only id" "exit=$rc sabit_isim_yok=$g_sabit_yok menu='$(printf '%s' "$menu_txt" | tr '\n' '/')' log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"
+fi
+
+# 10h. Ters yön: sabit listedeki bir isim config'den ÇIKARILINCA menü onu
+# tanımamalı. 10e "hiç tanımadığı" ismi sınıyordu; bu, "listeden çıkarılmış"
+# ismi sınıyor — yani whitelist config'e bağlı, eski sabit `case` değil.
+printf 'WORKDIR=~/Projeler\nclaude=Claude Code|npm i -g x|--permission-mode auto|-p|claude login\n' > "$STUB/dar.conf"
+: > "$STUB_LOG"; : > "$STUB_MENU"
+CACHY_AGENT_CONFIG="$STUB/dar.conf" FAKE_SEL="codex" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+if [[ $rc == 0 && ! -s "$STUB_LOG" ]]; then
+  ok "10h menu config'den cikarilan ismi reddeder"
+else
+  bad "10h menu config'den cikarilan isim" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"
+fi
+
+# 10i. Config EKSİKken menü v0.1.0'de "sessizce hiçbir şey yapma" idi:
+# kullanıcı kısayola basıyor, pencere açılmadan kapanıyor, sebep yok. Config'e
+# bağlandıktan sonra bu yol normalden çıktı; menü artık sebebi stderr'a yazıp
+# exit 1 veriyor. Sessizce kapanmaya devam etseydi kullanıcı config'inin
+# kurulmadığını anlayamazdı.
+: > "$STUB_LOG"
+err=$(CACHY_AGENT_CONFIG="$STUB/yok-boyle.conf" FAKE_SEL="" bash "$STUB/menu-test" 2>&1 >/dev/null); rc=$?
+if [[ $rc != 0 ]] && [[ "$err" == *"katalog"* || "$err" == *"liste"* ]]; then
+  ok "10i menu eksik config'de sebep yaziyor (sessiz kapanma yok)"
+else
+  bad "10i menu eksik config" "exit=$rc (0 sessiz kapanma, sifirdan farkli bekleniyordu) stderr='$err'"
+fi
+
+unset CACHY_AGENT_CONFIG
 rm -rf "$STUB"
 
 # 11. agents.conf parse + check
