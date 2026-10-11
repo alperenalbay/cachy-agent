@@ -2,9 +2,30 @@ name: ci
 
 on: [push, pull_request]
 
+# Depo salt-okunur: bu iş akışı hiçbir şey yazmaz, göndermez, silmez.
+permissions:
+  contents: read
+
+# Aynı dal için yeni push gelirse eski koşu iptal edilir (tasarruf + net sonuç).
+# Farklı dallar birbirini beklemez.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Takılı bir adım (ör. systemd-analyze'in bir unit'te beklemesi) işi
+    # sonsuza kadar açık tutmasın.
+    timeout-minutes: 10
+
+    # M-2: locale'i ADIM bazında değil İŞ bazında sabitliyoruz, böylece
+    # smoke/test/argv adımları da aynı kodlamada çalışır. Nedeni shellcheck
+    # adımındaki yorumda uzun uzun anlatılıyor.
+    env:
+      LC_ALL: C.UTF-8
+      LANG: C.UTF-8
+
     steps:
       - uses: actions/checkout@v4
 
@@ -13,10 +34,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y shellcheck desktop-file-utils
 
+      - name: shellcheck surumu
+        run: |
+          # I-3: surum kaymasi sessizce kontrolu zayiflatir.  ubuntu-latest
+          # apt ile shellcheck 0.9.0-1 kurar; 0.9.0'da olmayan bir kontrol
+          # (orn. SC2329) CI'da hicbir zaman tetiklenmez, ama yerelde
+          # tetikleniyor gibi gorunur.  Bu adim surumu DOGRULAR ve eskiyse
+          # kirmizi doner; sessizce daha az kontrol etmektense kirmizi olmak
+          # yeğdir.
+          sc_ver="$(shellcheck --version | sed -n 's/^version: //p')"
+          echo "shellcheck surumu: ${sc_ver:-bilinmiyor}"
+          if ! printf '%s' "$sc_ver" | grep -Eq '^0\.1[1-9]\.'; then
+            echo "::error::shellcheck 0.11+ gerekli, bulunan: ${sc_ver:-bilinmiyor}"
+            echo "0.9.0 sonrasi eklenen kontroller (orn. SC2317/SC2329) sessizce atlanir."
+            exit 1
+          fi
+
       - name: shellcheck
-        env:
-          LC_ALL: C.UTF-8
-          LANG: C.UTF-8
         run: |
           # Dosya listesi AÇIK — `src/bin/*` glob'u KULLANILMAZ.
           #
@@ -27,21 +61,33 @@ jobs:
           # kodumuzun kusuru değil, sadece yanlış girdi. Açık liste aynı
           # zamanda yanlışlıkla yeni dosya eklemeyi de engeller.
           #
-          # LC_ALL/LANG C.UTF-8 OLMADAN: shellcheck'in çıktısı bulunduğu
-          # locale'in kodlamasına göre yazılır. ASCII bir locale'de
-          # (LC_ALL=C, ya da sistemde üretilmemiş tr_TR.UTF-8) Türkçe
-          # karakterli bir bulgu satırı şu hatayı verir:
+          # LC_ALL/LANG C.UTF-8 NEDEN SABİTLENİYOR (ölçülmüş davranış):
+          # shellcheck bulgu satırlarını locale'in kodlamasıyla yazar. ASCII
+          # bir locale'de (LC_ALL=C, ya da sistemde ÜRETİLMEMİŞ bir tr_TR.UTF-8)
+          # Türkçe karakter içeren bir bulgu satırı yazılırken şu hata çıkar:
           #   commitBuffer: invalid argument (cannot encode character '\305')
-          # ve kontrol sessizce hiçbir bulgu göstermeden geçer — yani
-          # doğrulanan bir şey olmadan yeşil. Bu tuzak ölçülerek konuldu;
-          # LC_ALL/LANG'i kaldırırsanız shellcheck KIRMIZI değil SESSİZ
-          # olur, ki bu daha kötüdür.
+          # ve iki şekilde bozulur:
+          #   * boru YOKSA exit 2 (kırmızı) — ama çıktı kırıktır, hangi
+          #     dosyanın hangi hatayı verdiği okunamaz. Kırmızı yanlış yön
+          #     gösterir: "bir şey bozuk" sanılır, oysa bozulan sadece çıktıdır.
+          #   * çıktı BORUYSA exit 0 (SESSİZ GEÇME) — hiçbir bulgu gösterilmez.
+          # Yani asıl tehlike sessiz yeşildir; o yüzden (a) locale'i sabitliyor
+          # ve (b) bu adımda KESİNLİKLE boru kullanmıyoruz.  Boru kullanılsaydı
+          # kabuk yalnızca son komutun (grep/tee) durumunu görürdü ve shellcheck
+          # 2 döndürse bile adım yeşil kalırdı.
+          # Ek olarak `bash -e` (GitHub'ın varsayılanı) son komutun durumunu
+          # doğrudan adım durumuna taşır.
           #
-          # tests/test.sh ve tests/argv-differential.sh BİLEREK DIŞARIDA:
-          # ikisinin de test.sh'te SC1087/SC2012, argv-differential.sh'ta
-          # SC2016 bulguları TESCİLİ taban çizgidir ve bu görev kapsamı
-          # dışıdır (test.sh bu görevde değiştirilemez). CI'ı ilk günden
-          # kırmızı bırakmak, yeşil ama yarım bir CI'dan iyidir.
+          # tests/test.sh ve tests/argv-differential.sh BİLEREK DIŞARIDA —
+          # bu KALICI bir karar, "şimdilik uygun" değil. Bulgular TESCİLLİ
+          # taban çizgidir ve ayrı bir takibe (Task 9) yazıldı; o takip
+          # kapanmadan bu ikisi CI'ya ALINMAMALI (aksi halde CI ilk günden
+          # kırmızı olur). Düzeltmeler tek satırlık:
+          #   tests/test.sh:575        SC1087  -> ${l_hata[$a]}
+          #   tests/test.sh:264        SC2012  -> find ... -printf
+          #   tests/argv-differential.sh:70,75,76,77
+          #                            SC2016  -> satır bazında
+          #                                     # shellcheck disable=SC2016
           # tests/smoke.sh ise DENETLENİR — temiz.
           shellcheck -x src/bin/cachy-agent src/bin/cachy-agent-agents \
                        src/bin/cachy-agent-crash src/bin/cachy-agent-install \
@@ -60,3 +106,22 @@ jobs:
 
       - name: argv differential
         run: ./tests/argv-differential.sh --check
+
+      - name: testler repoya yazmamali
+        run: |
+          # I-1: Bu görevin asıl regresyon koruması budur. smoke.sh artık
+          # repo'ya yazmıyor; ama YENİDEN `python3 -m py_compile` gibi bir
+          # satır girerse kimse fark etmez.
+          #
+          # Düz `git status --porcelain` İŞE YARAMAZ: .gitignore zaten
+          # __pycache__/ ve *.pyc'yi yok sayıyor, yani tam olarak bu görevde
+          # silinen artifact'ler görünmez. --ignored=matching olmadan kontrol
+          # sessiz yeşil kalır — yani korumanın kendisi sahte güvence olur.
+          # --ignored=matching, yok sayılan dosyaları "!!" ile listeler.
+          out="$(git status --porcelain --ignored=matching -- .)"
+          if [ -n "$out" ]; then
+            echo "::error::suite repoya dosya yazdi:"
+            echo "$out"
+            exit 1
+          fi
+          echo "temiz: suite repoya yazmadi"

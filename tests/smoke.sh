@@ -30,13 +30,27 @@ echo "== python derleme =="
 # açıkça yazdığı için __pycache__ yine oluşur (Python 3.14'te ölçüldü).
 # Bunun yerine çıktıyı doğrudan geçici dizine yönlendiriyoruz: derleme
 # semantiği aynı kalır, repo'ya hiçbir dosya düşmez.
+#
+# $tmp/pyc dizini AÇIKÇA oluşturulur: py_compile.compile() içerde os.makedirs
+# çağırıyor ama bu bir uygulama detayı, sözleşme değil.  Dizin oluşturmayı
+# kendimiz yaparsak Python sürümü değişse de aynı davranış sürer.
+mkdir -p "$tmp/pyc"
 for f in "$REPO_DIR"/src/bin/*.py; do
   [[ -e "$f" ]] || continue
-  if python3 -c 'import py_compile,sys; py_compile.compile(sys.argv[1], cfile=sys.argv[2], doraise=True)' \
-       "$f" "$tmp/pyc/$(basename "$f").pyc" 2>&1; then
+  # PyCompileError yakalanıp err.msg yazdırılıyor: python3 -m py_compile tek
+  # satır hata basarken, doraise=True ham PyCompileError traceback'i
+  # döndürüyordu; okunması zor bir çıktıydı.
+  if err="$(python3 -c 'import py_compile,sys
+try:
+    py_compile.compile(sys.argv[1], cfile=sys.argv[2], doraise=True)
+except py_compile.PyCompileError as e:
+    print(e.msg, file=sys.stderr); sys.exit(1)' \
+       "$f" "$tmp/pyc/$(basename "$f").pyc" 2>&1)"; then
     ok "py_compile: $(basename "$f")"
   else
     bad "py_compile: $(basename "$f")"
+    # SC2001'e düşmemek için boru yerine printf: hata metni girintili basılır.
+    [[ -n "$err" ]] && printf '         %s\n' "$err"
   fi
 done
 
@@ -71,8 +85,29 @@ echo "== systemd birimleri =="
 if ! command -v systemd-analyze >/dev/null 2>&1; then
   skip "systemd-analyze yok"
 else
+  # systemd-analyze verify, ExecStart hedefinin ÇALIŞTIRILABİLİR olup olmadığına
+  # bakar; yalnızca sözdizimine değil. Unit'lerimiz ExecStart=%h/.local/bin/...
+  # kullandığı ve %h gerçek $HOME'a açıldığı için, uygulama KURULMAMIŞ bir
+  # makinede (yani CI'da) doğru unit bile kırmızı döner:
+  #   Command /home/runner/.local/bin/cachy-crash-watch is not executable
+  # Bu, smoke'un "kurulum yapmaz" sözüyle de çelişir: smoke hiçbir kurulum
+  # varsaymamalı, ama systemd-analyze varsayıyor.
+  #
+  # Çözüm: %h'yi geçici bir koke yönlendirip orada çalıştırılabilir stub'lar
+  # üretiyoruz. Böylece ExecStart'in VARLIĞI doğrulanır (birim doğru yolu
+  # gösteriyor), hedefin varlığı ise testin kendi stub'ıyla sağlanır.
+  # --root= DENENDI ve işe yaramadı: "Unit ... not found" verip çıkıyor 1.
+  #
+  # Bu hâlâ GERÇEK bir kontroldür: bozuk directive, eksik ExecStart, geçersiz
+  # timer değeri ve yanlış yazılmış ExecStart yolu hepsi yakalanır.
+  mkdir -p "$tmp/home/.local/bin"
+  for b in cachy-crash-watch cachy-agent-usage-update cachy-agent-usage-alarm; do
+    printf '#!/bin/sh\nexit 0\n' > "$tmp/home/.local/bin/$b"
+    chmod +x "$tmp/home/.local/bin/$b"
+  done
   for u in cachy-crash-watch.service cachy-agent-usage-refresh.service cachy-agent-usage-refresh.timer; do
-    if systemd-analyze verify "$REPO_DIR/src/systemd/$u" 2>&1; then ok "verify: $u"; else bad "verify: $u"; fi
+    sed "s|%h|$tmp/home|g" "$REPO_DIR/src/systemd/$u" > "$tmp/$u"
+    if systemd-analyze verify "$tmp/$u" 2>&1; then ok "verify: $u"; else bad "verify: $u"; fi
   done
 fi
 
