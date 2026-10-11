@@ -1498,7 +1498,7 @@ EOF
 cat > "$SCRATCH19/stub/cachy-agent" <<'EOF'
 #!/usr/bin/env bash
 [[ "${1:-}" == "default" ]] && { printf 'agy\n'; exit 0; }
-if [[ "${1:-}" == "--prompt" ]]; then sleep 3; printf 'FAKE-ANALIZ-ÇIKTISI\n'; exit 0; fi
+if [[ "${1:-}" == "--prompt" ]]; then sleep 5; printf 'FAKE-ANALIZ-ÇIKTISI\n'; exit 0; fi
 printf 'stub-agent: %s\n' "$*" >> "$STUB19_LOG"
 exit 0
 EOF
@@ -1512,9 +1512,18 @@ crash19_out=$(PATH="$SCRATCH19/stub:$PATH" bash "$BIN/cachy-agent-crash" 12345 s
 if [[ $rc19 -eq 0 && "$crash19_out" == *"FAKE-ANALIZ-ÇIKTISI"* ]]; then
   ok "19a crash analizi pencereye basiliyor"
 else bad "19a crash analizi" "rc=$rc19 out='$(printf '%s' "$crash19_out" | tail -3 | tr '\n' '/')'"; fi
-if [[ "$crash19_out" == *"Analiz sürüyor"* && "$crash19_out" == *" sn"* ]]; then
-  ok "19b analiz sırasında geçen süre gösteriliyor"
-else bad "19b süre göstergesi" "out='$(printf '%s' "$crash19_out" | grep -c 'Analiz sürüyor') satır'"; fi
+# 19b: sayaç GERÇEKTEN ilerlemeli. Önceki hâli `*" sn"*` alt dizesine
+# bakıyordu; printf biçimi " sn"yi her koşulda bastığı için döngü tamamen
+# öldürülse de test geçiyordu (mutasyonla kanıtlandı: 19b PASS, 19a FAIL).
+# Şimdi basılan SAYILARI çıkarıp en az iki farklı ve artan değer arıyoruz.
+_c19_nums=$(printf '%s' "$crash19_out" \
+  | grep -oE 'Analiz sürüyor\.\.\. [0-9]{3} sn' | grep -oE '[0-9]{3}' | sort -n | uniq)
+_c19_distinct=$(printf '%s' "$_c19_nums" | grep -c '[0-9]')
+_c19_first=$(printf '%s' "$_c19_nums" | head -1)
+_c19_last=$(printf '%s' "$_c19_nums" | tail -1)
+if [[ "$_c19_distinct" -ge 2 && -n "$_c19_first" && -n "$_c19_last" && "$_c19_last" -gt "$_c19_first" ]]; then
+  ok "19b sayaç ilerliyor (${_c19_first}→${_c19_last} sn)"
+else bad "19b sayaç ilerlemiyor" "farklı sayı=$_c19_distinct (${_c19_first:-yok}→${_c19_last:-yok})"; fi
 if grep -q "OPEN-CALLED" "$STUB19_LOG" 2>/dev/null; then
     ok "19c akış cachy-agent-open'a devrediliyor"
   else bad "19c open'a devir" "log='$(cat "$STUB19_LOG" 2>/dev/null | tr '\n' '/')'"; fi
@@ -1542,14 +1551,14 @@ rm -rf "$SCRATCH19"
 #
 # SKIP: uygulama kurulu değilse (temiz checkout / CI) — ürün hatası değil.
 _installed_any=0
-for _f in src/bin/*; do
+for _f in "$REPO"/src/bin/*; do
   [[ -e "$HOME/.local/bin/$(basename "$_f")" ]] && { _installed_any=1; break; }
 done
 if [[ $_installed_any -eq 0 ]]; then
   skip "20 kurulu kopya senkron (cachy-agent kurulu degil)"
 else
   _drift=""
-  for _f in src/bin/*; do
+  for _f in "$REPO"/src/bin/*; do
     _b=$(basename "$_f")
     [[ -f "$HOME/.local/bin/$_b" ]] || { _drift="$_drift eksik:$_b "; continue; }
     cmp -s "$_f" "$HOME/.local/bin/$_b" || _drift="$_drift farkli:$_b "
