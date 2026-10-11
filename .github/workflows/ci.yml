@@ -1,0 +1,62 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck desktop-file-utils
+
+      - name: shellcheck
+        env:
+          LC_ALL: C.UTF-8
+          LANG: C.UTF-8
+        run: |
+          # Dosya listesi AÇIK — `src/bin/*` glob'u KULLANILMAZ.
+          #
+          # Glob iki python3 shebang'li dosyayı da toplar:
+          #   src/bin/cachy-notify-action.py
+          #   src/bin/cachy-agent-usage-panel
+          # shellcheck bunlara SC1071 "Sorry!" hatası verir; bu bizim
+          # kodumuzun kusuru değil, sadece yanlış girdi. Açık liste aynı
+          # zamanda yanlışlıkla yeni dosya eklemeyi de engeller.
+          #
+          # LC_ALL/LANG C.UTF-8 OLMADAN: shellcheck'in çıktısı bulunduğu
+          # locale'in kodlamasına göre yazılır. ASCII bir locale'de
+          # (LC_ALL=C, ya da sistemde üretilmemiş tr_TR.UTF-8) Türkçe
+          # karakterli bir bulgu satırı şu hatayı verir:
+          #   commitBuffer: invalid argument (cannot encode character '\305')
+          # ve kontrol sessizce hiçbir bulgu göstermeden geçer — yani
+          # doğrulanan bir şey olmadan yeşil. Bu tuzak ölçülerek konuldu;
+          # LC_ALL/LANG'i kaldırırsanız shellcheck KIRMIZI değil SESSİZ
+          # olur, ki bu daha kötüdür.
+          #
+          # tests/test.sh ve tests/argv-differential.sh BİLEREK DIŞARIDA:
+          # ikisinin de test.sh'te SC1087/SC2012, argv-differential.sh'ta
+          # SC2016 bulguları TESCİLİ taban çizgidir ve bu görev kapsamı
+          # dışıdır (test.sh bu görevde değiştirilemez). CI'ı ilk günden
+          # kırmızı bırakmak, yeşil ama yarım bir CI'dan iyidir.
+          # tests/smoke.sh ise DENETLENİR — temiz.
+          shellcheck -x src/bin/cachy-agent src/bin/cachy-agent-agents \
+                       src/bin/cachy-agent-crash src/bin/cachy-agent-install \
+                       src/bin/cachy-agent-menu src/bin/cachy-agent-open \
+                       src/bin/cachy-agent-usage-alarm src/bin/cachy-agent-usage-codex \
+                       src/bin/cachy-agent-usage-copilot src/bin/cachy-agent-usage-oneline \
+                       src/bin/cachy-agent-usage-opencode src/bin/cachy-agent-usage-update \
+                       src/bin/cachy-crash-watch \
+                       install.sh uninstall.sh tests/smoke.sh
+
+      - name: smoke
+        run: ./tests/smoke.sh
+
+      - name: test
+        run: ./tests/test.sh
+
+      - name: argv differential
+        run: ./tests/argv-differential.sh --check
