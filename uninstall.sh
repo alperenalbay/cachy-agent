@@ -13,6 +13,18 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC="$REPO_DIR/src"
 
+# Kaldırılacak systemd unit adları — SABİT LİSTE (v0.1.0'daki gibi).
+# `$SRC/systemd/*` glob'u DEĞİL: uninstall, kurulumdan bağımsız olmalı.
+# Ölçülen hata (M-2): `src/` yokken glob boş kalıyor, prefix altında 22 dosya
+# geride kalıyordu. `rm -f` zaten yok olan dosyada sorun çıkarmadığı için
+# liste fazlalık bir isim taşısa da kaldırma yine tam olur — repo bağımlılığı
+# ise tamamen kalkar.
+UNITS=(
+  cachy-crash-watch.service
+  cachy-agent-usage-refresh.service
+  cachy-agent-usage-refresh.timer
+)
+
 # --- argüman ayrıştırma ------------------------------------------------------
 # install.sh ile AYNI biçim (--prefix DIR ve --prefix=DIR); yoksa test 13c'de
 # uninstall çalıştırırken install'ın anlamadığı bir argümanı geçersiz sayıp
@@ -78,7 +90,7 @@ fi
 
 if [[ -z "$PREFIX" ]]; then
   echo "== servisler durduruluyor =="
-  for u in cachy-crash-watch.service cachy-agent-usage-refresh.service cachy-agent-usage-refresh.timer; do
+  for u in "${UNITS[@]}"; do
     systemctl --user disable --now "$u" 2>/dev/null || true
     rm -f "$SYSTEMD_DIR/$u"
     echo "  kaldırıldı: $u"
@@ -88,9 +100,14 @@ else
   # --prefix kipinde systemctl ÇAĞRILMAZ. Kaldırılacak unit dosyaları prefix'in
   # İÇİNDE olduğu halde `disable --now` GERÇEK oturumdaki servisleri durdururdu:
   # test, kullanıcının çalışan kurulumunu kapatırdı. Dosyalar yine de silinir.
-  for f in "$SRC"/systemd/*; do
-    rm -f "$SYSTEMD_DIR/$(basename "$f")"
-    echo "  silindi: $SYSTEMD_DIR/$(basename "$f")"
+  #
+  # M-2: bu döngü `$SRC/systemd/*` glob'u ile DEĞİL, sabit `${UNITS[@]}`
+  # listesinden siliyor. Ölçülen hata: `src/` yokken (kurulumdan bağımsız
+  # çalışan bir kopyada) glob boş kalıyor ve 22 dosya geride kalıyordu.
+  # Kaldırma, kurulumun varlığına bağımlı olmamalı.
+  for u in "${UNITS[@]}"; do
+    rm -f "$SYSTEMD_DIR/$u"
+    echo "  silindi: $SYSTEMD_DIR/$u"
   done
   echo "  (atlandı: --prefix kipi — systemctl --user çalıştırılmadı)"
 fi
@@ -183,8 +200,11 @@ else
   # yollara eşittir (bkz. task-4-report.md Step 7 kanıtı). Aynı yolu iki kez
   # yazmamak, "prefix verilmediğinde yol değişti" kazasını önler.
   [[ -e "$CONFIG_DIR" ]] \
-    && ask "Config dizini silinsin mi? (default-agent + mute DAHİL: $CONFIG_DIR)" "$CONFIG_DIR" \
+    && ask "Config dizini silinsin mi? (default-agent + mute + agents.conf DAHİL: $CONFIG_DIR)" "$CONFIG_DIR" \
     || echo "  (yok: ~/.config/cachy-agent)"
+  # M-3: config dizini artık SADECE default-agent + mute değil, `agents.conf`
+  # katalog dosyasını da barındırıyor (Task 1'den beri). Kullanıcı "ev" derse
+  # AJAN LİSTESİ de silinir; soru metninde bunu söylemiyorduk.
   [[ -e "$HOME/.config/opencode/skills/diagnose-crash" ]] \
     && ask "diagnose-crash skill'i silinsin mi?" "$HOME/.config/opencode/skills/diagnose-crash" \
     || echo "  (yok: diagnose-crash skill)"

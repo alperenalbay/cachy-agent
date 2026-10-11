@@ -51,6 +51,50 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# --- PREFIX normalizasyonu (spec §7.1: "mutlak yol") --------------------------
+# PREFIX, `__HOME__` placeholder'larının genişletme değeridir ve dolayısıyla
+# desktop dosyalarının Exec= satırına, plasmoid'in komut satırına yazılır.
+# İki tehlike var:
+#
+#  1. GÖRELI YOL. `--prefix relpfx` Exec= satırına `relpfx/.local/bin/…`
+#     yazar; spec §7.1 "mutlak yol" diyor ve göreli Exec= geçersizdir.
+#  2. sed KAÇIŞI. Genişletme `sed "s|__HOME__|$PREFIX|g"` ile yapılır; yol
+#     içindeki `&` "eşleşen metin", `|` alan ayırıcı, `\` kaçış karakteridir.
+#     Ölçülen SESSİZ bozulma:
+#       --prefix '/tmp/f3/a&b\c' -> Exec=/tmp/f3/a__HOME__b\/.local/bin/…
+#         rc=0 ve `__HOME__` bile KALDI: kullanıcıya geçerli görünen ama
+#         işlevsiz bir .desktop üretildi.
+#       --prefix '/tmp/f2/a|b'   -> rc=1, teşhisi olmayan sed hatası.
+#     Üçü de exit 2 ile ve sebebiyle reddedilir.
+if [[ -n "$PREFIX" ]]; then
+  # sed'in kaçış karakteri `printf '\134'` ile üretiliyor: kaynak dosyada `'\'`
+  # yazmak shellcheck'e "tırnak kaçışı" sanılıyor (SC1003, yanlış pozitif).
+  BS="$(printf '\134')"
+  case "$PREFIX" in
+    *'|'*|*'&'*|*"$BS"*)
+      printf 'install.sh: --prefix yolu boru, & veya backslash iceremez (sed kacisi)\n' >&2
+      printf '  verilen: %s\n' "$PREFIX" >&2
+      exit 2
+      ;;
+  esac
+  # Var ama bir DOSYA ise açık hata (M-5): `mkdir -p` çıplak bir
+  # "Not a directory" basıp `set -e` ile script'i öldürürdü; sebebi görünmezdi.
+  # Dokstring "DIR yoksa oluşturur" diyordu, artık "dizin olmalı" de diyor.
+  if [[ -e "$PREFIX" && ! -d "$PREFIX" ]]; then
+    printf 'install.sh: --prefix bir dizin olmalı, dosya var: %s\n' "$PREFIX" >&2
+    exit 2
+  fi
+  # Spec §7.1: "DIR yoksa oluşturulur." Sonraki adımlarda da mkdir var, ama
+  # mutlaklaştırma burada dizinin var olmasını gerektiriyor (cd/pwd).
+  mkdir -p -- "$PREFIX" || {
+    printf 'install.sh: --prefix dizini oluşturulamadı: %s\n' "$PREFIX" >&2
+    exit 2
+  }
+  # MUTLAKLAŞTIR. `cd --` seçenek-benzeri dizin adlarında (ör. `-weird`)
+  # hata vermesin diye `--` kullanılır. Sembolik bağı da çözer.
+  PREFIX="$(cd -- "$PREFIX" && pwd)"
+fi
+
 # dep -> kontrol komutu -> pacman paketi
 DEPS=(
   "alacritty|command -v alacritty|alacritty"
@@ -127,7 +171,6 @@ if [[ -n "$PREFIX" ]]; then
   ICON_DIR="$PREFIX/icons"
   PLASMOID_DIR="$PREFIX/plasmoids/org.cachyagent.usage"
   CONFIG_DIR="$PREFIX/config/cachy-agent"
-  STATE_DIR="$PREFIX/state/cachy-agent"
 else
   HOME_SUB="$HOME"
   BIN_DIR="$HOME/.local/bin"
@@ -142,10 +185,16 @@ else
   # kendisi yazıyor; CLI de config'i tam olarak bu çözümlemeden arıyor:
   #   ${CACHY_AGENT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cachy-agent/agents.conf}
   CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cachy-agent"
-  STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent"
 fi
 
-mkdir -p "$BIN_DIR" "$FISH_DIR" "$SYSTEMD_DIR" "$APPS_DIR" "$FUZZEL_DIR" "$ICON_DIR" "$PLASMOID_DIR" "$CONFIG_DIR" "$STATE_DIR"
+# I2: STATE_DIR listeden CIKARILDI — ne ataniyor ne olusturuluyor.
+#  1. install.sh durum dizinine HICBIR SEY yazmiyor; durum dizini runtime
+#     script'lerin isidir ve v0.1.0'da install.sh'te hic yoktu.
+#  2. Erken yaratmak, uninstall.sh'nin temiz $HOME'daki
+#     "(yok: ~/.local/state/cachy-agent)" satirini etkilesimli `ask`'e
+#     donusturuyordu — kullanici hic dokunmadigi bir dizin icin soruya
+#     dusuyordu. uninstall.sh kendi STATE_DIR'ini kendisi tanimliyor.
+mkdir -p "$BIN_DIR" "$FISH_DIR" "$SYSTEMD_DIR" "$APPS_DIR" "$FUZZEL_DIR" "$ICON_DIR" "$PLASMOID_DIR" "$CONFIG_DIR"
 
 echo "== dosyalar kopyalanıyor =="
 # bin (çalıştırılabilir bayrağıyla)

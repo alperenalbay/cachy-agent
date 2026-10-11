@@ -609,16 +609,81 @@ if "$AG" check >/dev/null 2>&1; then ok "11al dogru agy sirasi kabul edildi"; el
 
 unset CACHY_AGENT_CONFIG
 
+# 12. (Task 1'de planlandı ama atlandı) `WORKDIR` varsayılanı
+# §5.1'de belirtiliyordu; test 11ag geriye uyumu zaten ölçüyor. Burada
+# KONUM kazanımı yok; bilinçli olarak eklenmedi (plan §7.2'de "12 (yeni)"
+# vardı ama 11ag aynı şeyi daha iyi ölçüyor ve ayrı test kazandırmaz).
+
+# 16. KRITIK-1 — config parser'ı LOCALE BAĞIMSIZ olmalı.
+#
+# `[[ "$id" =~ ^[A-Za-z0-9_-]+$ ]]` bash'te POSIX karakter ARALIKLARINI
+# collation ile yorumlar. tr_TR.UTF-8 altında `i` ve `ı` ayrı harflerdir;
+# `[A-Za-z]` içinde `I` vardır ama `i` YOKTUR. Sonuç: id `copilot` reddedilir
+# ve `check` kullanıcının kendi gecerli config'inde exit 1 verir.
+#
+# Bu hata Task 1'den beri vardı ve görünmezdi: o zamanki testler C locale
+# altında çalışıyordu. Projenin tek hedef platformu ise tr_TR — yani hata
+# ürünün YALNIZ gerçek hedefinde bozuluyordu.
+#
+# Düzeltme `cachy-agent-agents` içinde: `unset LC_ALL` + `export LC_COLLATE=C`.
+# (`LC_ALL`, `LC_COLLATE`'yi ezer; yalnız `LC_COLLATE=C` yetmezdi.)
+#
+# SKIP: `tr_TR.UTF-8` her CI runner'da üretilmiş olmayabilir. Locale yoksa
+# test ATLANIR — exit kodu etkilemez, ama bulunduğu her yerde ÇALIŞIR.
+if locale -a 2>/dev/null | grep -qi '^tr_TR\.utf-\?8$'; then
+  # Not: exit kodu `$?` ile DEĞİL, `if` üzerinden alınıyor (SC2181). Arada
+  # `head`/`tr` çalıştırırsak `$?` onların kodunu taşır ve test yanlış yeşil
+  # olur — test.sh'in bu dosyasındaki başka onlarca testte de aynı tuzak var.
+  if LC_ALL=tr_TR.UTF-8 CACHY_AGENT_CONFIG="$REPO/tests/fixtures/agents-valid.conf" \
+       "$AG" check >/dev/null 2>&1; then
+    ok "16 check tr_TR.UTF-8 altinda gecerli config'i kabul eder"
+  else
+    err16=$(LC_ALL=tr_TR.UTF-8 CACHY_AGENT_CONFIG="$REPO/tests/fixtures/agents-valid.conf" \
+      "$AG" check 2>&1 >/dev/null | head -2 | tr '\n' ' ')
+    bad "16 check tr_TR altinda basarisiz" "$err16"
+  fi
+  # Ters yön: locale SABİTLENMELİ, sadece reddedilmeme değil. tr collation
+  # altında `ı` normal ASCII değildir; C collation'da da reddedilmesi gerekir
+  # ama gerekçe farklıdır. Asıl ölçüm: i doğru kabul ediliyor.
+  got16=$(LC_ALL=tr_TR.UTF-8 "$AG" get copilot name 2>/dev/null)
+  if [[ "$got16" == "Copilot CLI" ]]; then
+    ok "16b get tr_TR altinda dogru alan donuyor"
+  else
+    bad "16b get tr_TR" "got='$got16'"
+  fi
+  # Noktasiz i (U+0131) GERCEKTEN reddedilmeli: C collation onu ASCII harf
+  # saymaz. Kabul edilseydi id bir dosya yoluna girebilirdi.
+  printf 'WORKDIR=/a\ndı=I|x|-|y|-\n' > "$SCRATCH/dotless.conf"
+  if LC_ALL=tr_TR.UTF-8 CACHY_AGENT_CONFIG="$SCRATCH/dotless.conf" "$AG" check >/dev/null 2>&1; then
+    bad "16c noktasiz i iceren id reddedilir" "check KABUL etti (exit 0), reddetmeliydi"
+  else
+    ok "16c noktasiz i iceren id reddedilir"
+  fi
+  # Türkçe karakterli GÖRÜNEN AD parse edilebilmeli: sabitleme LC_COLLATE'yi
+  # değiştirdi, LC_CTYPE'ye dokunmadı. Buradaki hata, "çözüm"ün karakter
+  # işlemeyi bozduğunu gösterirdi.
+  printf 'WORKDIR=/a\ncodex=Çok Özel|x|-|y|zğüşöç\n' \
+    > "$SCRATCH/trchars.conf"
+  got16c=$(LC_ALL=tr_TR.UTF-8 CACHY_AGENT_CONFIG="$SCRATCH/trchars.conf" "$AG" get codex login 2>/dev/null)
+  if [[ "$got16c" == "zğüşöç" ]]; then
+    ok "16d turkce karakterli degerler bozulmadan parse ediliyor"
+  else
+    bad "16d turkce karakterler" "got='$got16c'"
+  fi
+else
+  printf 'SKIP: 16 (tr_TR.UTF-8 locale yok — locale -a kontrol et)\n'
+fi
+
 # 13. install.sh --prefix / uninstall.sh --prefix
 #
 # `--prefix` bir "kurulum modu" değil, **izole kurulum** mekanizması (spec §7.1):
-# tüm yollar geçici bir dizinin altına yazılır, böylece test gerçek $HOME'e,
-# systemd-user oturumuna ve KDE cache'ine dokunmadan kurulumu deneyebilir.
+# tüm yollar geçici bir dizinin altına yazılır.
 #
 # Alt dizin yapısı (plan Task 4 Step 4'te SABİTLENMİŞTİR):
 #   $PFX/bin/ · $PFX/config/cachy-agent/ · $PFX/config/fish/conf.d/
 #   $PFX/config/systemd/user/ · $PFX/config/fuzzel/ · $PFX/applications/
-#   $PFX/icons/ · $PFX/plasmoids/org.cachyagent.usage/ · $PFX/state/cachy-agent/
+#   $PFX/icons/ · $PFX/plasmoids/org.cachyagent.usage/
+#   ($PFX/state/ YARATILMAZ — I2, aşağıda)
 #
 # DİKKAT (brifin kendi içinde çelişki var): planın Step 1'deki 13b snippet'i
 # `$PFX/fish/conf.d` ve `$PFX/systemd/user` diyordu; hemen altındaki paragraf ve
@@ -629,25 +694,146 @@ unset CACHY_AGENT_CONFIG
 # `</dev/null` KALICI: install.sh eksik bağımlılıkta onay `read`'i yapıyor; TTY'li
 # bir test koşumunda bu, testi süresiz bekletirdi. --prefix kipi onayı
 # zaten atlar (bkz. install.sh), `</dev/null` ise bunu testte de garantiler.
-PFX="$PFXROOT/pfx"
-# 13h icin: --prefix kurulumundan ONCE gercek config'in parmak izi.
-# "Dosya yok" ile "dosya var ama degismemis" AYNI sey degildir; bu yuzden
-# yokken sentinel olarak "yok" yaziyoruz.
+#
+# ============================================================================
+# SANDBOX — blok 13'ün TAMAMI, bu sınırın içinde çalışır (C1)
+# ============================================================================
+# Bulgu: 13i kendi `systemctl` stub'ını kuruyor ama YALNIZCA kendi iki
+# çağrısında kullanıyordu; 13a/13c/13e/13f `install.sh`/`uninstall.sh`'i
+# ÇIPLAK çalıştırıyordu. Ölçülen sonuç (pre-Task-4 install.sh = 1678f1c):
+# 13a **PASS** — eski script `--prefix`'i sessizce yok sayıp GERÇEK $HOME'a
+# kuruyor ve exit 0 dönüyor. 13b tek itiraz eden testti, ama 26 dosya
+# YAZILDIKTAN SONRA. Testin işi bu regresyonu YAZMADAN yakalamak.
+#
+# İki BAĞIMSIZ katman — ikisi de gerekli, biri diğerinin yerine geçmez:
+#
+#  (1) `HOME=$PFXROOT/fakehome` + XDG_* UNSET.
+#      `--prefix` tamamen yok sayılsa bile script'in yazma hedefi sahte ev
+#      olur. XDG_*'in unset edilmesi şart: `HOME`'u çevirmek tek başına
+#      yeterli değil, `install.sh` CONFIG_DIR'ı `${XDG_CONFIG_HOME:-...}`
+#      üzerinden çözer ve gerçek XDG_CONFIG_HOME kaçak yol olurdu.
+#
+#  (2) `systemctl` + `kbuildsycoca6` + `desktop-file-validate` stub'ı.
+#      Üçü de GERÇEK sistemi değiştiren komutlar: systemd kullanıcı oturumu,
+#      KDE ikon cache'i, desktop doğrulaması. Bir mutant bunları çağırırsa
+#      kaydedilir.
+#      Bu üçlü olmadan 13'in kendisi kullanıcının makinesini bozabilir —
+#      mutation ölçümü sırasında fiilen oldu: mutant `disable --now`
+#      çağırınca gerçek `cachy-crash-watch.service` durdu (bkz. rapor E6).
+#      İki ayrı reviewer da aynı yere takıldı.
+#
+# `pfx_run` tek giriş noktasıdır: blok 13'teki HER install/uninstall çağrısı
+# ondan geçer. Böylece yeni bir çağrı eklendiğinde korumasız kalmaz.
+SB_STUB="$PFXROOT/stub"; mkdir -p "$SB_STUB"
+for _c in systemctl kbuildsycoca6 desktop-file-validate; do
+  cat > "$SB_STUB/$_c" <<EOF
+#!/usr/bin/env bash
+printf '%s CALISTI: %s\n' "$_c" "\$*" >> "\$SB_LOG"
+exit 0
+EOF
+  chmod +x "$SB_STUB/$_c"
+done
+export SB_LOG="$PFXROOT/hostcalls.log"
+
+# Gerçek $HOME saklanıyor: blok sonunda geri alınacak. 13h tek başına
+# yeterli değil — sahte ev komple taranıyor (13j) ve PATH stub'ı çıkarılıyor.
+REAL_HOME="$HOME"
+# 13h GERÇEK config'i izleyecek. $HOME sandbox'a çevrileceği için bu yol
+# ÖNCE sabitlenmeli; yoksa 13h kendi yazdığı sahte config'i "değişmedi"
+# bulur ve BOŞ GEÇER.
 REAL_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/cachy-agent/agents.conf"
 REAL_CONF_BEFORE="yok"
 [[ -f "$REAL_CONF" ]] && REAL_CONF_BEFORE=$(cksum < "$REAL_CONF")
-if bash "$REPO/install.sh" --prefix "$PFX" </dev/null >/dev/null 2>&1; then
-  ok "13a install --prefix exit 0"
-else bad "13a install --prefix" "exit=$?"; fi
+
+export SB_HOME="$PFXROOT/fakehome"; mkdir -p "$SB_HOME"
+export HOME="$SB_HOME"
+unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CACHE_HOME
+
+# pfx_run <script> <prefix> [ek args...] — blok 13'ün tek giriş noktası.
+# Yazabileceği her yer $PREFIX ve $HOME(=fakehome) ile sınırlı; systemd/KDE
+# stub'ı üzerinden.
+pfx_run() {
+  local script="$1" prefix="$2"; shift 2
+  PATH="$SB_STUB:$PATH" HOME="$SB_HOME" bash "$script" --prefix "$prefix" "$@" \
+    </dev/null >/dev/null 2>&1
+}
+: > "$SB_LOG"
+
+PFX="$PFXROOT/pfx"
+if pfx_run "$REPO/install.sh" "$PFX"; then a_rc=0; else a_rc=$?; fi
+# M-1 + C1.3: 13a artık SADECE exit koduna bakmıyor; prefix ağacının gerçekten
+# dolduğunu da iddia ediyor. `--prefix`'i yok sayan bir script exit 0 döndüğü
+# halde burada KIRMIZI olur — çünkü ağaç boş kalır.
+a_tree=1
+for f in "$PFX/bin/cachy-agent" "$PFX/config/cachy-agent/agents.conf"; do
+  [[ -f "$f" ]] && a_tree=0
+done
+if [[ $a_rc -eq 0 && $a_tree -eq 0 ]]; then
+  ok "13a install --prefix exit 0 + agac $PFX altinda"
+else
+  bad "13a install --prefix" "rc=$a_rc agac_dolu=$((1-a_tree)) — rc=0 tek basina yeterli degil"
+fi
 missing=""
 for f in "$PFX/bin/cachy-agent" "$PFX/bin/cachy-agent-agents" "$PFX/config/cachy-agent/agents.conf" \
-         "$PFX/config/fish/conf.d/cachy-agent.fish" "$PFX/applications/cachy-agent.desktop" \
+         "$PFX/config/fish/conf.d/cachy-agent.fish" \
+         "$PFX/applications/cachy-agent.desktop" "$PFX/applications/cachy-agent-usage.desktop" \
          "$PFX/config/systemd/user/cachy-crash-watch.service" \
+         "$PFX/config/systemd/user/cachy-agent-usage-refresh.service" \
+         "$PFX/config/systemd/user/cachy-agent-usage-refresh.timer" \
          "$PFX/plasmoids/org.cachyagent.usage/metadata.json" \
-         "$PFX/config/fuzzel/fuzzel.ini" "$PFX/icons/cachy-agent.svg"; do
+         "$PFX/plasmoids/org.cachyagent.usage/contents/ui/main.qml" \
+         "$PFX/config/fuzzel/fuzzel.ini" "$PFX/icons/cachy-agent.svg" \
+         "$PFX/bin/cachy-agent-usage-opencode" "$PFX/bin/cachy-agent-usage-codex" \
+         "$PFX/bin/cachy-agent-usage-panel" "$PFX/bin/cachy-agent-usage-update" \
+         "$PFX/bin/cachy-crash-watch" "$PFX/bin/cachy-notify-action.py"; do
   [[ -f "$f" ]] || missing="$missing${f#"$PFX"/} "
 done
 if [[ -z "$missing" ]]; then ok "13b --prefix dosyalari yerinde"; else bad "13b --prefix" "yok: $missing"; fi
+
+# 13b-4 (M-4): "listelenenler var" demek, ağaçta FAZLA dosya bırakılmasını
+# sessizce geçirirdi. Bu yüzden ağacın TAMAMINI tarayıp beklenen listede
+# olmayan dosya arıyoruz. BOŞ DİZİNLER kabul: gerçek $HOME kurulumu da öyle
+# bırakır (ör. $PFX/state/ hiç oluşmadı — I2).
+# `sort` de LC_ALL=C ile: aksi halde sıralama collation'a bağlı olur ve
+# `cachy-agent.desktop` / `cachy-agent-usage.desktop` gibi iki satır tr_TR
+# altında BAŞKA sırayla gelir — test kendi listesini yanlış bulur. (KRITIK-1'in
+# test tarafındaki kardeşi: karşılaştırma da deterministik olmalı.)
+got_files=$(cd "$PFX" && find . -type f | sed 's#^\./##' | LC_ALL=C sort)
+want_files=$(cat <<'EOF'
+applications/cachy-agent-usage.desktop
+applications/cachy-agent.desktop
+bin/cachy-agent
+bin/cachy-agent-agents
+bin/cachy-agent-crash
+bin/cachy-agent-install
+bin/cachy-agent-menu
+bin/cachy-agent-open
+bin/cachy-agent-usage-alarm
+bin/cachy-agent-usage-codex
+bin/cachy-agent-usage-copilot
+bin/cachy-agent-usage-oneline
+bin/cachy-agent-usage-opencode
+bin/cachy-agent-usage-panel
+bin/cachy-agent-usage-update
+bin/cachy-crash-watch
+bin/cachy-notify-action.py
+config/cachy-agent/agents.conf
+config/fish/conf.d/cachy-agent.fish
+config/fuzzel/fuzzel.ini
+config/systemd/user/cachy-agent-usage-refresh.service
+config/systemd/user/cachy-agent-usage-refresh.timer
+config/systemd/user/cachy-crash-watch.service
+icons/cachy-agent.svg
+plasmoids/org.cachyagent.usage/contents/ui/main.qml
+plasmoids/org.cachyagent.usage/metadata.json
+EOF
+)
+tree_diff=$(diff <(printf '%s\n' "$want_files") <(printf '%s\n' "$got_files"))
+if [[ -z "$tree_diff" ]]; then
+  ok "13b-4 --prefix agaci tam olarak beklenen dosyalar"
+else
+  bad "13b-4 --prefix agaci beklenenden farkli" "$(printf '%s' "$tree_diff" | tr '\n' '/')"
+fi
 
 # 13b-2. Ters yön: yanlış yere (config/ OLMADAN) sızan dosya olmamalı.
 # Sadece "doğru yerde var" demek, install.sh'in aynı dosyayı İKİ yere birden
@@ -659,41 +845,101 @@ done
 if [[ -z "$stray" ]]; then ok "13b-2 --prefix yanlis yere sizmadi"; else bad "13b-2 --prefix sizinti" "asiri: $stray"; fi
 
 # 13b-3. `__HOME__` genişletmesi prefix'e olmalı (spec §7.1): desktop dosyası
-# test prefix'ini gösterir, mutlak yol olarak geçerli kalır.
+# test prefix'ini MUTLAK yol olarak gösterir.
 HOME_LEFT=""
-for f in "$PFX/applications/cachy-agent.desktop" "$PFX/plasmoids/org.cachyagent.usage/contents/ui/main.qml"; do
+for f in "$PFX/applications/cachy-agent.desktop" "$PFX/applications/cachy-agent-usage.desktop" \
+         "$PFX/plasmoids/org.cachyagent.usage/contents/ui/main.qml"; do
   [[ -e "$f" ]] || continue
   grep -q '__HOME__' "$f" && HOME_LEFT="$HOME_LEFT$(basename "$f"):__HOME__ "
   grep -q "$PFX" "$f" || HOME_LEFT="$HOME_LEFT$(basename "$f"):prefix-yok "
 done
 if [[ -z "$HOME_LEFT" ]]; then ok "13b-3 __HOME__ prefix ile genisletildi"; else bad "13b-3 __HOME__ genislemesi" "$HOME_LEFT"; fi
 
-if bash "$REPO/uninstall.sh" --prefix "$PFX" </dev/null >/dev/null 2>&1; then
-  ok "13c uninstall --prefix exit 0"
-else bad "13c uninstall --prefix" "exit=$?"; fi
-left=""
-for f in "$PFX/bin/cachy-agent" "$PFX/bin/cachy-agent-agents" "$PFX/config/cachy-agent/agents.conf" \
-         "$PFX/config/fish/conf.d/cachy-agent.fish" "$PFX/applications/cachy-agent.desktop" \
-         "$PFX/config/systemd/user/cachy-crash-watch.service" \
-         "$PFX/plasmoids/org.cachyagent.usage/metadata.json" \
-         "$PFX/config/fuzzel/fuzzel.ini" "$PFX/icons/cachy-agent.svg"; do
-  [[ -e "$f" ]] && left="$left${f#"$PFX"/} "
+# 13k (I3). `--prefix` REDDEDİLMEDEN ÖNCE mutlaklaştırılmalı ve sed'e özel
+# karakter içermemeli. Ölçülen üç sessiz bozulma:
+#   --prefix relpfx        -> Exec=relpfx/…        (göreli yol, spec ihlali)
+#   --prefix '/tmp/a&b\c'  -> Exec=/tmp/a__HOME__b\ (rc=0, __HOME__ bile kaldı)
+#   --prefix '/tmp/a|b'    -> rc=1, teşhissiz sed patlaması
+# Göreli prefix testi SANDBOX İÇİNDE ve BİR ALT-SÜREÇTE çalışmalı:
+#  - göreli yol, çağıranın CWD'sine göre yorumlanır. CWD $REPO olsaydı test
+#    REPOYU kirletirdi — bu turda tam olarak oldu:
+#    `src/plasmoid/org.cachyagent.usage/relpfx13k/` git'in "untracked" listesine
+#    düştü ve 13b-4 onu "fazladan dosya" olarak yakaladı. Test 13'ün işi de
+#    tam olarak budur: kaza olmadan yakalamak.
+#  - `cd` alt süreçte yapılıyor ki test.sh'in kendi CWD'si hiç değişmesin
+#    (13b-4 ve 13d göreli yollarla çalışıyor).
+k_exec=""
+k_relative=0
+k_probe="$SB_HOME/relpfx13k"
+(
+  cd "$SB_HOME" || exit 1
+  PATH="$SB_STUB:$PATH" HOME="$SB_HOME" bash "$REPO/install.sh" --prefix relpfx13k \
+    </dev/null >/dev/null 2>&1 && printf '0\n' > "$PFXROOT/.krel" \
+                            || printf '1\n' > "$PFXROOT/.krel"
+)
+if [[ -f "$PFXROOT/.krel" ]] && [[ "$(cat "$PFXROOT/.krel")" == "0" ]]; then
+  k_relative=1
+fi
+if [[ -f "$k_probe/applications/cachy-agent.desktop" ]]; then
+  k_exec=$(grep -m1 '^Exec=' "$k_probe/applications/cachy-agent.desktop")
+fi
+rm -rf "$k_probe" "$PFXROOT/.krel"
+# sed'e özel karakterli prefix'ler REDDEDİLMELİ:
+#   &  -> sed'de "eşleşen metin"; sessizce bozuk .desktop üretirdi
+#   |  -> sed'de alan ayırıcı; script'i patlatırdı (teşhissiz rc=1)
+#   \  -> kaçış karakteri
+# Her biri exit 2 vermeli. Bu satır MUTASYONUN KENDİSİNİ de ölçer:
+# install.sh reddi kaldırırsa k_bad=1 olur.
+k_bad=0
+for p in "$PFXROOT/bad&x" "$PFXROOT/bad|x" "$PFXROOT/bad\\x"; do
+  PATH="$SB_STUB:$PATH" HOME="$SB_HOME" bash "$REPO/install.sh" --prefix "$p" \
+    </dev/null >/dev/null 2>&1 && k_bad=1
 done
-if [[ -z "$left" ]]; then ok "13d uninstall --prefix temizledi"; else bad "13d uninstall --prefix" "kaldi: $left"; fi
+rm -rf "$SB_HOME/relpfx13k" "$PFXROOT/bad&x" "$PFXROOT/bad|x" "$PFXROOT/bad\\x"
+if [[ $k_relative -eq 1 && "$k_exec" == Exec=/* && $k_bad -eq 0 ]]; then
+  ok "13k --prefix mutlaklastirilir, sed ozel karakteri reddedilir"
+else
+  bad "13k --prefix normalizasyonu" "goreli_kabul=$k_relative exec='$k_exec' ozel_kabul=$k_bad"
+fi
+
+# 13l (I2). install.sh durum dizini OLUŞTURMAMALI.
+# Ölçülen etki: `mkdir -p` listesinde STATE_DIR varken, temiz bir $HOME'da
+# `uninstall.sh` "(yok: ~/.local/state/cachy-agent)" yerine etkileşimli
+# `ask` basıyordu — kullanıcı hiç dokunmadığı bir dizin için soruya düşüyordu.
+# Mutation (STATE_DIR'yi listeye geri koy) bu testi kırmızı yapıyor.
+pfx_run "$REPO/install.sh" "$PFXROOT/pfx-state"
+if [[ -d "$PFXROOT/pfx-state/state" ]]; then
+  bad "13l install.sh state dizini olusturdu" "kullanici hic kullanmadi, uninstall soracak"
+  rm -rf "$PFXROOT/pfx-state/state"
+else
+  ok "13l install.sh state dizini olusturmuyor (I2)"
+fi
+rm -rf "$PFXROOT/pfx-state"
+
+if pfx_run "$REPO/uninstall.sh" "$PFX"; then c_rc=0; else c_rc=$?; fi
+left=""
+while IFS= read -r f; do
+  left="$left${f#"$PFX"/} "
+done < <(cd "$PFX" && find . -type f 2>/dev/null | sed 's#^\./##' | sort)
+if [[ $c_rc -eq 0 && -z "$left" ]]; then
+  ok "13c/13d uninstall --prefix exit 0 ve agaci tamamen temizledi"
+else
+  bad "13c/13d uninstall --prefix" "rc=$c_rc kaldi: $left"
+fi
 
 # 13e. ikinci calistirma (idempotans)
-if bash "$REPO/uninstall.sh" --prefix "$PFX" </dev/null >/dev/null 2>&1; then ok "13e uninstall iki kez calisir"; else bad "13e uninstall idempotent" "exit=$?"; fi
+if pfx_run "$REPO/uninstall.sh" "$PFX"; then ok "13e uninstall iki kez calisir"; else bad "13e uninstall idempotent" "exit=$?"; fi
 
 # 13f. `agents.conf` YALNIZCA YOKKEN yazilir; kullanicinin duzenlemesi her
 # kurulumda korunur. Bu, catalog dosyasinin tek amaci: v0.1.0'da ajan listesi
 # script'lerin icindeydi, kurulum hicbir seyi yazmiyordu; simdi dosya yaziliyor ve
 # `cp -f` kullanilsa kullanici listenin uzerine yazilirdi.
 PFX2="$PFXROOT/pfx2"
-bash "$REPO/install.sh" --prefix "$PFX2" </dev/null >/dev/null 2>&1 || true
+pfx_run "$REPO/install.sh" "$PFX2" || true
 if [[ -f "$PFX2/config/cachy-agent/agents.conf" ]]; then
   printf '\n# kullanici duzenlemesi\n' >> "$PFX2/config/cachy-agent/agents.conf"
   before_sum=$(cksum < "$PFX2/config/cachy-agent/agents.conf")
-  bash "$REPO/install.sh" --prefix "$PFX2" </dev/null >/dev/null 2>&1; rc=$?
+  pfx_run "$REPO/install.sh" "$PFX2"; rc=$?
   after_sum=$(cksum < "$PFX2/config/cachy-agent/agents.conf")
   if [[ $rc -eq 0 && "$before_sum" == "$after_sum" ]]; then
     ok "13f yeniden kurulum agents.conf'i EZMIYOR (kullanici duzenlemesi korunur)"
@@ -721,7 +967,8 @@ rm -rf "$PFX2"
 # 13h. --prefix KURULUMU config'i PREFIX altina yazar, `~/.config` altina DEGIL.
 # Yanlislikla gercek config'i yazmak, testin calistigi makinedeki kullanicinin
 # katalog dosyasini ezmektir (ve aslinda onu DUZELTIRDIĞINI sanip sessizce
-# yeni ajanlarin listesini degistirmek olurdu).
+# yeni ajanlarin listesini degistirmek olurdu). REAL_CONF, sandbox'a girmeden
+# ÖNCE sabitlendiği için bu gerçekten kullanıcının config'idir.
 REAL_CONF_AFTER="yok"
 [[ -f "$REAL_CONF" ]] && REAL_CONF_AFTER=$(cksum < "$REAL_CONF")
 if [[ "$REAL_CONF_BEFORE" == "$REAL_CONF_AFTER" ]]; then
@@ -730,35 +977,46 @@ else
   bad "13h --prefix gercek config'e dokundu" "$REAL_CONF: once=$REAL_CONF_BEFORE sonra=$REAL_CONF_AFTER"
 fi
 
-# 13i. --prefix kurulumunda systemctl CAGIRILMAZ (spec §7.1).
-# Bunu test etmenin sebebi bir "iyi olurdu" değil, somut bir kaza: uninstall
-# --prefix'in prefix'teki unit dosyalarını silerken `systemctl --user disable
-# --now` çağırması, dosyalar prefix'te olsa bile GERÇEK oturumdaki çalışan
-# servisleri sustururdu — yani `bash tests/test.sh` kullanıcının kurulumunu
-# kapatırdı. install tarafı da aynı gerekçeyle atlanır.
+# 13i (I1). `--prefix` kurulumunda systemd VE KDE komutları ÇAĞRILMAZ
+# (spec §7.1: "preflight'in systemctl/kbuildsycoca6/desktop-file-validate
+# adımları atlanır").
 #
-# Ölçüm: PATH'e `systemctl` stub'ı koyup çağrıları KAYDEDİRİZ. Test 10'daki
-# fuzzel/alacritty stub'larıyla aynı mekanizma; test.sh'te PATH'e yazılan tek
-# yer burasidir (Ruling 10 yolu sed degil, PATH'te).
-SYSSTUB="$PFXROOT/sysstub"; mkdir -p "$SYSSTUB"
-cat > "$SYSSTUB/systemctl" <<'EOF'
-#!/usr/bin/env bash
-printf 'SYSTEMCTL CALISTI: %s\n' "$*" >> "$SYSLOG"
-exit 0
-EOF
-chmod +x "$SYSSTUB/systemctl"
-export SYSLOG="$PFXROOT/sysctl.log"
-: > "$SYSLOG"
-PFX3="$PFXROOT/pfx3"
-PATH="$SYSSTUB:$PATH" bash "$REPO/install.sh" --prefix "$PFX3" </dev/null >/dev/null 2>&1
-PATH="$SYSSTUB:$PATH" bash "$REPO/uninstall.sh" --prefix "$PFX3" </dev/null >/dev/null 2>&1
-i_log="$(cat "$SYSLOG" 2>/dev/null || echo BOŞ)"
+# Bu bir "iyi olurdu" değil: uninstall --prefix'in prefix'teki unit dosyalarını
+# silerken `systemctl --user disable --now` çağırması, dosyalar prefix'te olsa
+# bile GERÇEK oturumdaki çalışan servisleri sustururdu — `bash tests/test.sh`
+# kullanıcının kurulumunu kapatırdı. Mutation ölçümünde fiilen oldu.
+#
+# Üçü de aynı log'a yazılır; eski stub seti YALNIZCA systemctl'i kapsıyordu,
+# bu yüzden kbuildsycoca6 sızıntısı (MUT-C) sessizce yeşildi.
+pfx_run "$REPO/install.sh" "$PFXROOT/pfx3"
+pfx_run "$REPO/uninstall.sh" "$PFXROOT/pfx3"
+i_log="$(cat "$SB_LOG" 2>/dev/null || true)"
 if [[ -z "$i_log" ]]; then
-  ok "13i --prefix systemctl'i cagirmiyor (gercek servislere dokunmuyor)"
+  ok "13i --prefix systemctl/kbuildsycoca6/desktop-file-validate cagirmiyor"
 else
-  bad "13i --prefix systemctl cagirdi" "$i_log"
+  bad "13i --prefix host komutu cagirdi" "$i_log"
 fi
-unset SYSLOG; rm -rf "$SYSSTUB" "$PFX3"
+
+# 13j (C1'nin ikinci katmanı). `--prefix` TAMAMEN YOK SAYILSA bile hiçbir şey
+# sandbox'ın dışına yazılmamalı. 13h tek bir config dosyasına bakar; burada
+# sahte evin TAMAMI taranıyor. `--prefix`'i yok sayan script sahte eve yazar
+# (korumasız kalsaydı gerçek eve yazardı) ve bu test KIRMIZI olur.
+j_home_files=""
+[[ -d "$SB_HOME" ]] && j_home_files=$(cd "$SB_HOME" && find . -type f | sed 's#^\./##' | sort)
+if [[ -z "$j_home_files" ]]; then
+  ok "13j --prefix yok sayilsa bile sandbox disina yazmiyor (sahte ev bos)"
+else
+  bad "13j --prefix sahte eve yazti" "$(printf '%s' "$j_home_files" | tr '\n' ' ')"
+fi
+
+# Blok sonu: stub dizinini PATH'ten ÇIKAR. `HOME` GERÇEK $HOME olarak kalır —
+# geri alma şart: test 3/4/5/6/7/8/9 gerçek kurulumu okuyor, blok 13'ün
+# sandbox'ında kalsalardı yanlış şeyi sınarlardı. `HOME`'u geri almak için
+# kaydetmiş olduğumuz REAL_HOME kullanılır (sandbox $HOME'yu değiştirdi).
+export PATH="${PATH#"$SB_STUB":}"
+export HOME="$REAL_HOME"
+unset SB_LOG
+rm -rf "$SB_STUB" "$SB_HOME"
 
 # --- Task 2: argv differential (spec §8.1/§8.2) ---
 # Bu ikisi GOLDEN FILE testleridir: refactor ÖNCESİ de geçerler, çünkü mevcut
