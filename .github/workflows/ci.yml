@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # ubuntu-latest 2026-10-19 itibarıyla Ubuntu 26ya geçecek;
     # Takılı bir adım (ör. systemd-analyze'in bir unit'te beklemesi) işi
     # sonsuza kadar açık tutmasın.
     timeout-minutes: 10
@@ -27,7 +27,7 @@ jobs:
       LANG: C.UTF-8
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5   # v4 Node 20 hedefliyor ve kullanımdan kaldırıldı
 
       - name: Install deps
         run: |
@@ -53,12 +53,13 @@ jobs:
 
       - name: shellcheck surumu
         run: |
-          # I-3: surum kaymasi sessizce kontrolu zayiflatir.  ubuntu-latest
-          # apt ile shellcheck 0.9.0-1 kurar; 0.9.0'da olmayan bir kontrol
-          # (orn. SC2329) CI'da hicbir zaman tetiklenmez, ama yerelde
-          # tetikleniyor gibi gorunur.  Bu adim surumu DOGRULAR ve eskiyse
-          # kirmizi doner; sessizce daha az kontrol etmektense kirmizi olmak
-          # yeğdir.
+          # I-3: sürüm kayması sessizce kontrolü zayıflatır.
+          # Bu dal İLK push'ta CI'yi kendi ortamı kırmızıya döndürdü:
+          # ubuntu imajının apt deposunda shellcheck 0.9.0 var, koruma 0.11+
+          # istiyor. Artık resmî statik binary kuruluyor (yukarıya bkz).
+          # 0.9.0'da olmayan kontroller (örn. SC2317/SC2329) CI'da hiç
+          # tetiklenmez ama yerelde tetikleniyor gibi görünür — yani sessiz
+          # yanlış güvence. Bu adım sürümü DOĞRULAR ve eskiyse kırmızı döner.
           sc_ver="$(shellcheck --version | sed -n 's/^version: //p')"
           echo "shellcheck surumu: ${sc_ver:-bilinmiyor}"
           if ! printf '%s' "$sc_ver" | grep -Eq '^0\.1[1-9]\.'; then
