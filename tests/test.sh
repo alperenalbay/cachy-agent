@@ -1532,6 +1532,41 @@ if [[ $rc19b -eq 1 && "$crash19b" == *"Agent çalıştırılamadı"* ]]; then
 else bad "19d agent hata yolu" "rc=$rc19b out='$(printf '%s' "$crash19b" | tail -3 | tr '\n' '/')'"; fi
 rm -rf "$SCRATCH19"
 
+# 20. Kurulu kopya repo ile SENKRON mu (dağıtım kayması koruması).
+#
+# Kullanıcı iki kez "düzeltme çalışmıyor" dedi: kod worktree'de düzeltilip
+# commit'lenmişti ama ~/.local/bin'e HİÇ yüklenmemişti. Tanı penceresi kurulu
+# script'i çalıştırdığı için kullanıcı hep eski sürümü gördü. Suite'in
+# tamamı worktree'i test eder (bilinçli tasarım, Ruling 1), dolayısıyla bu
+# ayrımı yakalayan şey yoktu. Bu test onu yakalar.
+#
+# SKIP: uygulama kurulu değilse (temiz checkout / CI) — ürün hatası değil.
+_installed_any=0
+for _f in src/bin/*; do
+  [[ -e "$HOME/.local/bin/$(basename "$_f")" ]] && { _installed_any=1; break; }
+done
+if [[ $_installed_any -eq 0 ]]; then
+  skip "20 kurulu kopya senkron (cachy-agent kurulu degil)"
+else
+  _drift=""
+  for _f in src/bin/*; do
+    _b=$(basename "$_f")
+    [[ -f "$HOME/.local/bin/$_b" ]] || { _drift="$_drift eksik:$_b "; continue; }
+    cmp -s "$_f" "$HOME/.local/bin/$_b" || _drift="$_drift farkli:$_b "
+  done
+  # plasmoid de aynı sepette (fetchCommand gömülü python'a bakmasın)
+  _pm="$HOME/.local/share/plasma/plasmoids/org.cachyagent.usage/contents/ui/main.qml"
+  _ps="$REPO/src/plasmoid/org.cachyagent.usage/contents/ui/main.qml"
+  if [[ -f "$_pm" && -f "$_ps" ]]; then
+    sed 's|__HOME__|'"$HOME"'|g' "$_ps" | cmp -s - "$_pm" || _drift="$_drift farkli:plasmoid/main.qml "
+  fi
+  if [[ -z "$_drift" ]]; then
+    ok "20 kurulu kopya repo ile senkron"
+  else
+    bad "20 kurulu kopya eski" "$_drift-> ./install.sh calistir"
+  fi
+fi
+
 # SKIP exit code'u ETKİLEMEZ: yalnızca gerçek kırmızılar (FAIL) hata sayılır.
 # Atlanan testler ortam eksikliğidir, ürün hatası değil.
 printf '\nÖzet: %d geçti, %d kaldı, %d atlandı (toplam %d)\n' "$PASS" "$FAIL" "$SKIP" "$((PASS+FAIL+SKIP))"
