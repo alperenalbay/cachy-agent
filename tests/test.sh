@@ -274,7 +274,11 @@ rm -rf "$SC6"
 # 6b'nin ürettiği JSON'ları OKUMALI: çıktıda 6d'nin stub id'leri görünmeli.
 # Yalnızca exit 0'a bakmak "kayıt yok" mesajıyla da geçerdi (kayıt yoksa
 # script yine 0 döner) — yani test, verinin gerçekten okunduğunu ölçmezdi.
-out7=$(cachy-agent usage 2>&1); rc=$?
+#
+# CACHY_AGENT_BIN_DIR pin'i (Ruling 10 seam'i): `usage` alt komutu artık
+# kardeş script `cachy-agent-usage-fetch`'i exec'liyor. Kurulum YOKKEN bile
+# çalışma ağacından çözülmeli — suite'in "kurulum gereksinimi yok" sözü.
+out7=$(CACHY_AGENT_BIN_DIR="$BIN" cachy-agent usage 2>&1); rc=$?
 if [[ $rc -eq 0 && "$out7" == *"opencode: today=3"* && "$out7" == *"codex: today=3"* && "$out7" == *"copilot: today=3"* ]]; then
   ok "7 usage exit 0 + 6b kayitlarini okuyor"
 else
@@ -890,6 +894,64 @@ unset CACHY_AGENT_CONFIG
 # KONUM kazanımı yok; bilinçli olarak eklenmedi (plan §7.2'de "12 (yeni)"
 # vardı ama 11ag aynı şeyi daha iyi ölçüyor ve ayrı test kazandırmaz).
 
+# 18. usage-fetch semasi + XDG_STATE_HOME (Task 7)
+#
+# Plasmoid main.qml bu script'in stdout'unu JSON.parse edip providers[]/alarm
+# okuyor; `cachy-agent usage` da aynı script'i summary modunda çalıştırıyor.
+# İki tüketici tek sözleşmede buluşur (bkz. docs/usage-schema.md).
+#
+# HOME sabitlemesi (18a-18e) mutasyon kanıtıdır: eski main.qml gömülü python'u
+# ~/.local/state hardcoded idi (Task 7 defekt-1). XDG_STATE_HOME'u yok sayıp
+# $HOME/.local/state'e dönen bir sürüm, sahte eve (BOŞ) düşeceği için 18a/18b
+# KIRMIZI olur — gerçek kullanıcının ~/.local/state içeriğine rastgele bağımlı
+# olmadan, her makinede.
+FXHOME="$SCRATCH_ROOT/fetch-home"; mkdir -p "$FXHOME"
+FX="$SCRATCH/fetch"
+mkdir -p "$FX/agents/usage"
+cat > "$FX/agents/usage/codex.json" <<'J'
+{"schemaVersion":1,"id":"codex","name":"Codex","updatedAt":"2026-10-06T00:00:00Z","ready":true,"tierLabel":"pro","limits":[{"label":"5h","percent":0.42,"resetsAt":"2026-10-07T12:00:00Z"}],"todayPrompts":3,"todaySessions":1,"todayTotalTokens":10,"totalPrompts":9,"totalSessions":4}
+J
+cat > "$FX/agents/usage/copilot.json" <<'J'
+{"schemaVersion":1,"id":"copilot","name":"Copilot","updatedAt":"2026-10-06T00:00:00Z","ready":false,"tierLabel":"","limits":[],"todayPrompts":0,"todaySessions":0,"todayTotalTokens":0,"totalPrompts":0,"totalSessions":0,"reason":"no CLI quota command"}
+J
+mkdir -p "$XDG_STATE_HOME/cachy-agent/agents"
+cp -r "$FX/agents/usage" "$XDG_STATE_HOME/cachy-agent/agents/"
+out=$(HOME="$FXHOME" cachy-agent-usage-fetch 2>/dev/null); rc=$?
+ok_json=$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); p={x["id"]:x for x in d["providers"]}; assert p["codex"]["today"]==3 and p["codex"]["total"]==9 and abs(p["codex"]["limits"][0]["percent"]-0.42)<1e-9 and d["alarm"] is False; assert p["copilot"]["name"]=="Copilot"; print("OK")' 2>&1)
+if [[ $rc -eq 0 && "$ok_json" == "OK" ]]; then ok "18a fetch semasi"; else bad "18a fetch semasi" "rc=$rc py='$ok_json'"; fi
+# XDG_STATE_HOME okunuyor (eski gömülü kod hardcoded ~/.local/state'e bakıyordu)
+if printf '%s' "$out" | grep -q codex; then ok "18b XDG_STATE_HOME okundu"; else bad "18b XDG_STATE_HOME" "codex yok"; fi
+# alarm esigi: >=0.9 (0.42 -> False 18a'da ölçüldü; 0.95 -> True burada)
+cat > "$FX/agents/usage/codex.json" <<'J'
+{"schemaVersion":1,"id":"codex","name":"Codex","updatedAt":"2026-10-06T00:00:00Z","ready":true,"tierLabel":"","limits":[{"label":"5h","percent":0.95,"resetsAt":null}],"todayPrompts":0,"todaySessions":0,"todayTotalTokens":0,"totalPrompts":0,"totalSessions":0}
+J
+cp "$FX/agents/usage/codex.json" "$XDG_STATE_HOME/cachy-agent/agents/usage/codex.json"
+al=$(HOME="$FXHOME" cachy-agent-usage-fetch 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["alarm"])' 2>/dev/null)
+if [[ "$al" == "True" ]]; then ok "18c alarm esigi >=0.9"; else bad "18c alarm" "alarm=$al"; fi
+# summary modu: eski `cachy-agent usage` satır formatı, bu kez GERÇEK değerlerle
+# (eski gömülü tek satır limits[].usedPercent/limits[].name/today/total okuyordu;
+# hiçbiri kolektörlerde yoktu — her kayıt "?" basıyordu, Task 7 defekt-2)
+sum=$(HOME="$FXHOME" cachy-agent-usage-fetch summary 2>/dev/null); rc=$?
+if [[ $rc -eq 0 && "$sum" == *"codex: today=0 total=0 limits[5h 95%]"* ]]; then
+  ok "18d summary modu"
+else
+  bad "18d summary modu" "rc=$rc sum='$(printf '%s' "$sum" | tr '\n' '/')'"
+fi
+# ready:false + reason summary'de görünür (copilot'un reason'u hiç okunmuyordu)
+if [[ "$sum" == *"copilot: veri yok (no CLI quota command)"* ]]; then
+  ok "18e summary ready:false + reason gosteriyor"
+else
+  bad "18e summary reason" "sum='$(printf '%s' "$sum" | tr '\n' '/')'"
+fi
+# boş durumda stdout BOŞ DEĞİL: main.qml stdout=="" -> "boş çıktı" hatası
+EMPT="$SCRATCH_ROOT/fetch-empty-state"; mkdir -p "$EMPT/cachy-agent/agents/usage"
+outf=$(XDG_STATE_HOME="$EMPT" HOME="$FXHOME" cachy-agent-usage-fetch 2>/dev/null); rc=$?
+if [[ $rc -eq 0 && "$outf" == '{"providers":[],"alarm":false}' ]]; then
+  ok "18f bos kayitta da providers JSON basiliyor"
+else
+  bad "18f bos kayitta providers JSON" "rc=$rc out='$outf'"
+fi
+
 # 16. KRITIK-1 — config parser'ı LOCALE BAĞIMSIZ olmalı.
 #
 # `[[ "$id" =~ ^[A-Za-z0-9_-]+$ ]]` bash'te POSIX karakter ARALIKLARINI
@@ -1095,6 +1157,7 @@ bin/cachy-agent-open
 bin/cachy-agent-usage-alarm
 bin/cachy-agent-usage-codex
 bin/cachy-agent-usage-copilot
+bin/cachy-agent-usage-fetch
 bin/cachy-agent-usage-oneline
 bin/cachy-agent-usage-opencode
 bin/cachy-agent-usage-panel

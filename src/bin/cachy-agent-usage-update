@@ -54,7 +54,14 @@ for agent in "${AGENTS[@]}"; do
   fi
   out="$(timeout 30 "$collector" 2>/dev/null)" || continue
   [[ -z "$out" ]] && continue
-  if ! printf '%s' "$out" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+  # JSON doğrulaması: program heredoc'ta, veri argv'de. Eski tek satırlık
+  # gömülü doğrulama smoke.sh'ın "src/ içinde gömülü python yok" taramasına
+  # takılıyordu; davranış aynı — parse edilemeyen kolektör çıktısı atlanır.
+  if ! python3 - "$out" 2>/dev/null <<'PY'
+import json, sys
+json.loads(sys.argv[1])
+PY
+  then
     continue
   fi
   tmp="$OUT_DIR/$clean.json.tmp.$$"

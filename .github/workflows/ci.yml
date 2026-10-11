@@ -93,7 +93,8 @@ jobs:
                        src/bin/cachy-agent-crash src/bin/cachy-agent-install \
                        src/bin/cachy-agent-menu src/bin/cachy-agent-open \
                        src/bin/cachy-agent-usage-alarm src/bin/cachy-agent-usage-codex \
-                       src/bin/cachy-agent-usage-copilot src/bin/cachy-agent-usage-oneline \
+                       src/bin/cachy-agent-usage-copilot src/bin/cachy-agent-usage-fetch \
+                       src/bin/cachy-agent-usage-oneline \
                        src/bin/cachy-agent-usage-opencode src/bin/cachy-agent-usage-update \
                        src/bin/cachy-crash-watch \
                        install.sh uninstall.sh tests/smoke.sh

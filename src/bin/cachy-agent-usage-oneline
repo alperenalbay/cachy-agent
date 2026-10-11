@@ -53,7 +53,10 @@ for fp in files:
             d = json.load(f)
         aid = str(d.get("id") or os.path.splitext(os.path.basename(fp))[0])
         if not d.get("ready", True):
-            parts.append(f"{aid}:-")
+            # ready:false + reason: tek satırda gerekçe göster (Task 7);
+            # öncesi yalnız "-" basıyordu, copilot'un sebebi hiç görünmüyordu.
+            reason = str(d.get("reason") or "").strip()
+            parts.append(f"{aid}:- ({reason})" if reason else f"{aid}:-")
             continue
         shown = []
         for lim in (d.get("limits") or []):

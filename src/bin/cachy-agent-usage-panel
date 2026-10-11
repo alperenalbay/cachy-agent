@@ -92,8 +92,15 @@ def render():
         return "\n".join(lines)
     for rec in records:
         name = str(rec.get("name") or rec.get("id") or "?")
-        if not rec.get("ready", False):
-            lines.append("\u25cf %s  %sveri yok%s" % (name, GRAY, RESET))
+        # ready varsayılanı True (Task 7 defekt-3): usage-oneline True,
+        # usage-panel False idi — aynı soruya iki farklı cevap. Alan
+        # eksikse kayıt "hazır" sayılır; sayaçlar 0'a düşer.
+        if not rec.get("ready", True):
+            # ready:false + reason: gerekçe göster (Task 7); öncesi yalnız
+            # "veri yok" basıyordu, copilot'un sebebi hiç görünmüyordu.
+            reason = str(rec.get("reason") or "").strip()
+            msg = "veri yok" + (" (%s)" % reason if reason else "")
+            lines.append("\u25cf %s  %s%s%s" % (name, GRAY, msg, RESET))
             continue
         try:
             today_n = int(rec.get("todayPrompts") or 0)

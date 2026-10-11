@@ -61,6 +61,19 @@ else
   ok "src/ temiz (gerçek /home/ yolu yok)"
 fi
 
+echo "== gömülü python taraması (src içinde gömülü python3 kalıntısı olmamalı) =="
+# Task 7 öncesi iki yerde bütün bir python programı tırnak içine gömülüydü
+# (main.qml fetchCommand ve `cachy-agent usage`); ikisi de gerçek script'lere
+# taşındı. Bu tarama kalıbın geri dönmesini yasaklar. Regex, `python3 -c`
+# kalıbının TIRNAKLI biçimini arar: `python3 - <veri> <<'PY'` heredoc deseni
+# (oneline/panel/fetch'in kullandığı) ve `python3 "$yol"` çağrıları eşleşmez.
+# Tarama src/ ile sınırlı: tests/ içindeki python3 çağrıları meşrudur.
+if grep -rn --exclude-dir=__pycache__ -E "python3 -c ['\"]" "$REPO_DIR/src/" 2>&1; then
+  bad "src/ içinde gömülü python3 -c kaldı"
+else
+  ok "src/ temiz (gömülü python3 yok)"
+fi
+
 echo "== __HOME__ placeholder =="
 for f in "$REPO_DIR"/src/applications/*.desktop "$REPO_DIR"/src/plasmoid/org.cachyagent.usage/contents/ui/main.qml; do
   if grep -q '__HOME__' "$f"; then ok "placeholder var: ${f#"$REPO_DIR"/}"; else bad "placeholder YOK: ${f#"$REPO_DIR"/}"; fi

@@ -134,8 +134,12 @@ case "$cmd" in
     fi
     ;;
   usage)
-    _udir="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage"
-    if ! ls "$_udir"/*.json >/dev/null 2>&1; then echo "kayıt yok, \`cachy-agent-usage-update\` çalıştır"; else for _f in "$_udir"/*.json; do python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); lims=",".join(f"{l.get("label",l.get("name",""))} {l.get("percent",l.get("usedPercent","?"))}%" for l in (d.get("limits") or [])) or "-"; print(f"{d.get("id","?")}: today={d.get("todayPrompts",d.get("today",0))} total={d.get("totalPrompts",d.get("total","?"))} limits[{lims}]")' "$_f"; done; fi ;; # usage-summary
+    # Kullanım okuma TEK yerde: cachy-agent-usage-fetch summary. Buradaki
+    # gömülü tek satırlık python; limits[].usedPercent, limits[].name, today
+    # ve total gibi kolektörlerin hiç üretmediği alanları okuyordu — her kayıt
+    # "?" basıyordu (Task 7 defekt-2). Kardeş binary Ruling 10 seam'iyle
+    # çözülür: kurulumda $HOME/.local/bin, testte çalışma ağacı.
+    exec "${CACHY_AGENT_BIN_DIR:-$HOME/.local/bin}/cachy-agent-usage-fetch" summary ;;
   --version|-v)
     _vfile="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../../VERSION"
     # repo dışı kurulumda VERSION dosyası yoksa sessizce "unknown"

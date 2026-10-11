@@ -32,7 +32,7 @@ PlasmoidItem {
     property string installBase: "/usr/bin/alacritty --class CachyAgent -e __HOME__/.local/bin/cachy-agent-install "
     // Katalog agents.conf'tan gelir: {"catalog":[{"id","name","installed","external"}]}
     property string catalogCommand: "__HOME__/.local/bin/cachy-agent-agents json"
-    property string fetchCommand: "python3 -c 'import json, glob, os; F=sorted(glob.glob(os.path.expanduser(\"~/.local/state/cachy-agent/agents/usage/*.json\"))); P=[{\"id\": str(d.get(\"id\", os.path.basename(p)[:-5])), \"name\": str(d.get(\"name\", d.get(\"id\", os.path.basename(p)[:-5]))), \"today\": int(d.get(\"todayPrompts\") or 0), \"total\": int(d.get(\"totalPrompts\") or 0), \"limits\": [{\"label\": str(x.get(\"label\", \"\")), \"percent\": float(x.get(\"percent\", 0) or 0), \"resetsAt\": str(x.get(\"resetsAt\", \"\"))} for x in (d.get(\"limits\") or [])]} for p, d in [(p, json.load(open(p))) for p in F]]; print(json.dumps({\"providers\": P, \"alarm\": any(l[\"percent\"] >= 0.9 for pr in P for l in pr[\"limits\"])}))'"
+    property string fetchCommand: "__HOME__/.local/bin/cachy-agent-usage-fetch"
 
     Plasma5Support.DataSource {
         id: executable
