@@ -100,7 +100,30 @@ DEF_FILE="$XDG_CONFIG_HOME/cachy-agent/default-agent"
 cur=$(cat "$DEF_FILE" 2>/dev/null || echo "opencode")
 got=$(cachy-agent default 2>&1); rc=$?
 if [[ $rc == 0 && "$got" == "$cur" ]]; then ok "3a default gösterir ($cur)"; else bad "3a default gösterir" "exit=$rc got='$got' beklenen='$cur'"; fi
-if cachy-agent default uydurma >/dev/null 2>&1; then bad "3b default uydurma" "exit 0 döndü, 1 bekleniyordu"; else ok "3b default uydurma exit 1"; fi
+# 3b. BİLİNMEYEN AD REDDEDİLMEZ (bilinmeyen agent: <ad>). `neg()` kalıbı:
+# tam olarak rc=1 + stderr'da beklenen GEREKÇE. neg() blok 11'de tanımlı
+# (3b'den sonra), o yüzden aynı kalıp burada elle uygulanır.
+#
+# NEDEN config sabitleniyor (I-3): temiz ortamda `agents.conf` YOKTUR, o zaman
+# `cachy-agent-agents` "config dosyası yok" deyip exit 1 döner — koruma olsa
+# da olmasa da. Yani rc=1'e bakan bir test "guard çalışıyor" ölçmez, "config
+# eksik" ölçer; v0.1.0'te gerçek config var olduğu için bu test o zaman gerçekten
+# korumayı ölçüyordu, izolasyonla birlikte boşa düştü. Config sabitlenince
+# "bilinmeyen agent" yolu açılır ve gerekçe ölçülebilir.
+#
+# Neden id listesi de bekleniyor: `run_agent`'ın guard'ı
+# "bilinmeyen agent: X (bilinenler: ...)", `--pick`/`default` guard'ı ise
+# "bilinmeyen agent: X (...)" basar. Yalnız "bilinmeyen agent: uydurma" deseydik
+# iki yol birbirini geçerdi; parantez içinin listenin KENDİSİ olması, korumanın
+# `--pick` dalında olduğunu ayırt ediyor.
+C3B_CFG="$REPO/tests/fixtures/agents-valid.conf"
+C3B_IDS="opencode agy claude codex crush copilot cursor-agent grok"
+err=$(CACHY_AGENT_CONFIG="$C3B_CFG" cachy-agent default uydurma 2>&1 >/dev/null); rc=$?
+if [[ $rc -eq 1 && "$err" == "bilinmeyen agent: uydurma ($C3B_IDS)" ]]; then
+  ok "3b default bilinmeyen adı reddeder (exit 1 + gerekçe)"
+else
+  bad "3b default uydurma" "rc=$rc (1 bekleniyordu) stderr='$err'"
+fi
 after=$(cat "$DEF_FILE" 2>/dev/null || echo "opencode")
 if [[ "$after" == "$cur" ]]; then ok "3c default dosyası değişmedi"; else bad "3c default dosyası değişmedi" "'$cur' -> '$after'"; fi
 
@@ -121,7 +144,7 @@ else
   bad "3d config izolasyonu" "rc=$rc got='$got3d' (codex bekleniyordu)"
 fi
 # 3e, `default_agent()` fallback'ının ÖLÇÜMÜDÜR: dosya yokken komut exit 1
-# verip ham `cat:` hatası basıyordu (bkz. task-5-report.md §3, ürün hatası).
+# verip ham `cat:` hatası basıyordu (bkz. task-5-report.md §5, ürün hatası).
 if [[ $rc2 -eq 0 && "$got3e" == "opencode" ]]; then
   ok "3e default dosya yoksa opencode'a düşüyor (sıfırdan bağımsız)"
 else
@@ -132,9 +155,19 @@ fi
 out=$(cachy-agent --prompt 2>&1); rc=$?
 if [[ $rc == 1 && "$out" == *"kullanım"* ]]; then ok "4 --prompt argümansız"; else bad "4 --prompt argümansız" "exit=$rc out='$out'"; fi
 
-# 5. --pick uydurma exit 1
-out=$(cachy-agent --pick uydurma </dev/null 2>&1); rc=$?
-if [[ $rc == 1 ]]; then ok "5 --pick uydurma"; else bad "5 --pick uydurma" "exit=$rc out='$out'"; fi
+# 5. --pick uydurma exit 1 + GEREKÇE
+# 3b ile aynı boşluk (I-3): config sabitlenmezse `cachy-agent-agents` "config dosyası
+# yok" deyip exit 1 döner ve test, koruma olmasa da geçer. Config sabitlenir ve
+# `--pick`in kendi guard'ının mesajı (id listesi parantezde) beklenir —
+# `run_agent`ın "(bilinenler: ...)" varyantı kabul edilmez, çünkü o yol
+# --pick'in guard'ı mutant olsa bile geçerdi.
+err=$(CACHY_AGENT_CONFIG="$REPO/tests/fixtures/agents-valid.conf" \
+      cachy-agent --pick uydurma </dev/null 2>&1 >/dev/null); rc=$?
+if [[ $rc -eq 1 && "$err" == "bilinmeyen agent: uydurma ($C3B_IDS)" ]]; then
+  ok "5 --pick bilinmeyen adı reddeder (exit 1 + gerekçe)"
+else
+  bad "5 --pick uydurma" "rc=$rc (1 bekleniyordu) stderr='$err'"
+fi
 
 # 6. usage-update exit 0 + 3 JSON geçerli
 #
@@ -290,15 +323,22 @@ fi
 # "söz dizimi geçerli" demek, `__HOME__` genişletmesi bozulursa yeşil kalırdı.
 if command -v desktop-file-validate >/dev/null 2>&1; then
   DV_DIR="$SCRATCH_ROOT/dv"; mkdir -p "$DV_DIR"
-  dok=1; dvmsg=""
+  dok=1; dvmsg=""; dv_n=0
   for f in "$REPO"/src/applications/*.desktop; do
+    [[ -e "$f" ]] || continue
+    dv_n=$((dv_n+1))
     b="$(basename "$f")"
     sed "s|__HOME__|$SCRATCH_ROOT|g" "$f" > "$DV_DIR/$b"
     if grep -q '__HOME__' "$DV_DIR/$b"; then dok=0; dvmsg="$dvmsg$b:__HOME__ kaldi; "; fi
     o=$(desktop-file-validate "$DV_DIR/$b" 2>&1); r=$?
     [[ $r -eq 0 && -z "$o" ]] || { dok=0; dvmsg="$dvmsg$b:exit=$r:$o; "; }
   done
-  if [[ $dok == 1 ]]; then ok "9 desktop-file-validate (kaynak, __HOME__ genisletilmis)"; else bad "9 desktop-file-validate" "$dvmsg"; fi
+  # SAYIM (M-1): döngü gövdesi hiç çalışmasa `dok` 1'de kalır ve test BOŞA
+  # geçerdi — yani `src/applications` yanlışlıkla boşalır/kayarsa kimse
+  # fark etmezdi. 13b-4 zaten beklenen .desktop kümesini tam olarak sabitliyor
+  # (applications/ altında 2 dosya); burada aynı sayı ikinci kez doğrulanır.
+  if [[ $dv_n -ne 2 ]]; then dok=0; dvmsg="$dvmsg bulunan=$dv_n (2 bekleniyordu); "; fi
+  if [[ $dok == 1 ]]; then ok "9 desktop-file-validate (kaynak, __HOME__ genisletilmis, $dv_n dosya)"; else bad "9 desktop-file-validate" "$dvmsg"; fi
 else
   skip "9 desktop-file-validate (ortam yok: desktop-file-validate komutu bulunamadi)"
 fi
@@ -539,6 +579,55 @@ if [[ $l_n -eq 8 && -z "$l_hata" ]]; then
   ok "10l open: 8 ajanin login ipucu config'ten"
 else
   bad "10l open login ipucu" "ajan=$l_n (8 bekleniyordu) hata=$l_hata"
+fi
+
+# 10m (I-2). brief Step 6'nın İKİNCİ assertion'ı: `claude` PATH'te KURULU
+# olduğunda düz satır (kur listesinde DEĞİL) seçilir ve alacritty stub'ına
+# `cachy-agent-open claude` ile gider.
+#
+# NEDEN ÖNEMLİ (bulgu): `installed`/`missing` ayrımı — yani "bu ajan kurulu mu"
+# sorusu — HİÇBİR TESTTE ölçülmüyordu. `cachy-agent-menu`in installed dizisini
+# her zaman boş bırakan mutantı suite'i TAMAMEN YEŞİL bırakıyordu. 10a-10l'nin
+# hepsi `FAKE_SEL`'i ZORLA veriyor; menü listesine hiç bakmıyorlar.
+#
+# O yüzden AYRI bir test yazmak yetmez: AYRIMIN KENDİSİ ölçülmeli. Burada üç
+# şey birden sınanır:
+#   (a) LİSTE: `claude` çıplak satır olarak VAR (kurulu bölümde),
+#   (b) LİSTE: `+ claude (kur)` YOK — yani claude "eksik" sayılmıyor,
+#   (c) YÖNLENDİRME: seçim alacritty stub'ına `-e .../cachy-agent-open claude`.
+#
+# (a)+(b) AYIRIMI, (c) YÖNLENDİRMEYİ ölçer. (c) tek başına YETMEZ: mutant
+# altında log BİREBİR AYNI kalıyor (fuzzel stub'ı seçimi zorla verdiği için),
+# yani ayrım ancak (a)/(b) ile görünür. Ölçüldü.
+#
+# PATH KONTROLÜ ŞART: bu makinede gerçek `claude`/`codex` KURULU. PATH
+# sızdırılırsa menü, sahip olduğu makineye göre "kurulu" görür ve test sonucu
+# donanıma bağımlı olurdu. Bu yüzden menü YALNIZCA kontrollü PATH ile
+# çalıştırılır: $STUB (stub'lar + claude) + $SYSBIN (yalnız bash/cat/sed/tr).
+# Böylece her makinede claude=KURULU, codex=EKSİK.
+SYSBIN="$STUB/sysbin"; mkdir -p "$SYSBIN"
+for _b in bash cat sed tr; do ln -sf "$(command -v "$_b")" "$SYSBIN/$_b"; done
+# `claude` stub'ı: menünün `command -v claude` ile bulacağı "kurulu ajan".
+printf '#!/usr/bin/env bash\nexit 0\n' > "$STUB/claude"; chmod +x "$STUB/claude"
+: > "$STUB_LOG"; : > "$STUB_MENU"
+FAKE_SEL="claude" PATH="$STUB:$SYSBIN" CACHY_AGENT_CONFIG="$REPO/tests/fixtures/agents-valid.conf" \
+  bash "$STUB/menu-test" >/dev/null 2>&1; m_rc=$?
+menu_m="$(cat "$STUB_MENU" 2>/dev/null)"
+if [[ $m_rc -eq 0 ]] \
+   && grep -qx 'claude' "$STUB_MENU" \
+   && ! grep -q '^+ claude (kur)$' "$STUB_MENU" \
+   && grep -q 'cachy-agent-open' "$STUB_LOG" \
+   && grep -qx 'claude' "$STUB_LOG"; then
+  ok "10m menu kurulu ajani (claude) 'kur' listesine koymaz, -open'e yollar"
+else
+  bad "10m menu kurulu/missing ayrimi" "rc=$m_rc menu='$(printf '%s' "$menu_m" | tr '\n' '/')' log=$(cat "$STUB_LOG" 2>/dev/null | tr '\n' ' ')"
+fi
+# Ters yön: PATH'te OLMAYAN ajan gerçekten "kur" listesine düşmeli. Bu ikili
+# ayrımın YAN yüzünü sabitler; yalnız (a)/(b) bir yönü ölçüyordu.
+if grep -qx '+ codex (kur)' "$STUB_MENU"; then
+  ok "10m-2 menu eksik ajani (codex) 'kur' satiri olarak listeler"
+else
+  bad "10m-2 menu eksik ajan" "'+ codex (kur)' satirinda yok"
 fi
 
 unset CACHY_AGENT_CONFIG
@@ -1218,6 +1307,34 @@ export XDG_STATE_HOME="$SAVED_XDG_STATE"
 unset SB_LOG
 rm -rf "$SB_STUB" "$SB_HOME"
 
+# 17c (I-1). SENTİNEL KENDİ KENDİNİ SALTANMIŞ MI?
+#
+# Bu blok, 17a/17b'nin ÖLÇÜMDE GEÇERLİ olduğunun kanıtıdır — asıl test değil.
+# 17a/17b `REAL_CONF_DIR`/`REAL_STATE_DIR` yollarını korunan dizin sanar. Bu
+# iki değişken dosyanın BAŞINDA, XDG_* ÇEVRİLMEDEN ÖNCE sabitlenmiştir; bu
+# sıralama bir YORUM değil, testin tek dayandığı şeydir. Sıralama bozulursa
+# (sentineller çevrimden sonra yeniden türetilirse) korunan dizin SAHTE kök
+# olur, suite sahte köke yazdığı için parmak izi "değişmedi" görünür ve
+# 17a/17b kullanıcının GERÇEK config/state ağacını sessizce korumasız bırakır.
+#
+# BU TUZAK BU DEPOYA İKİ KEZ DÜŞTÜ: Task 4'te `REAL_CONF_BEFORE` ad çakışması
+# ve 13h'nin sürümü. YORUM OLARAK BIRAKILMAZ — çalıştırılıp ölçülür.
+#
+# Ölçülen davranış (M3b): yalnız `REAL_CONF_DIR`'i geçirmenin KIRMIZIya
+# döndürdüğü, mevcut dosyada ise yeşil kaldığı — task-5-report.md §I-1.
+sent_conf_dur=0; sent_state_dur=0
+if [[ "$REAL_CONF_DIR" == "$XDG_CONFIG_HOME"/* || "$REAL_CONF_DIR" == "$SCRATCH_ROOT"/* || "$REAL_CONF_DIR" == "$PFXROOT"/* ]]; then
+  sent_conf_dur=1
+fi
+if [[ "$REAL_STATE_DIR" == "$XDG_STATE_HOME"/* || "$REAL_STATE_DIR" == "$SCRATCH_ROOT"/* || "$REAL_STATE_DIR" == "$PFXROOT"/* ]]; then
+  sent_state_dur=1
+fi
+if [[ $sent_conf_dur -eq 0 && $sent_state_dur -eq 0 ]]; then
+  ok "17c sentineller kendi sahte kokunun disinda (17a/17b olcumu gecerli)"
+else
+  bad "17c sentineller kendi sahte kokunu koruyor" "conf=$REAL_CONF_DIR state=$REAL_STATE_DIR — 17a/17b SAHTE dizini olcuyor, gercek agac korumasiz"
+fi
+
 # 17. İZOLASYON KANITI: suite gerçek kullanıcının config/state ağacına
 # DOKUNMADI. Suite'in başında alınan parmak izleriyle karşılaştırılır.
 #
@@ -1225,6 +1342,15 @@ rm -rf "$SB_STUB" "$SB_HOME"
 # gerçek `~/.config/cachy-agent` ve `~/.local/state/cachy-agent` ağaçlarının
 # içeriği (dosya listesi + cksum) değişmiş OLMAMALI. Test 3/6/7 geçici köke
 # yazıyor; 13h ise tek config dosyasına bakıyordu (ağacın tamamına değil).
+#
+# (M-2) 17a/17b NOKTA-AN DEĞERLENDİRMEDİR, süreklilik izlemi değil: parmak izi
+# suite'in BAŞINDA ve SONUNDA alınır ve karşılaştırılır. `~/.local/state/
+# cachy-agent/agents/usage/*.json` dosyalarını `cachy-agent-usage-refresh.timer`
+# HER 15 DAKİKADA yeniden yazar; suite ~2 saniye sürdüğü için çakışma penceresi
+# çok dar. Yine de bir çakışma 17a'yı suite ile ilgisi olmayan bir sebeple
+# kırmızıya döndürebilir. Yapısal çözüm (kilitleme, snapshot) bu göreve
+# konu değil ve bilinçli olarak yapılmadı: 17'nin işi "suite dokunmadı"
+# iddiasını ölçmek, "sistem hiç değişmiyor" iddiasını değil.
 f_state_after="$(fingerprint "$REAL_STATE_DIR")"
 f_conf_after="$(fingerprint "$REAL_CONF_DIR")"
 if [[ "$REAL_STATE_TREE_BEFORE" == "$f_state_after" ]]; then

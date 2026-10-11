@@ -105,7 +105,7 @@ case "$cmd" in
     # döndürüyordu — yani sıfırdan kurulumda ilk çalıştırılan komut hata veriyor
     # ve kullanıcı varsayılanın ne olduğunu öğrenemiyordu. Aynı değeri
     # kullanan `default_agent()` (satır 7) `opencode`'a düşüyor; bu dal da
-    # onunla aynı davranışı vermeli. Ölçüm: task-5-report.md §3.
+    # onunla aynı davranışı vermeli. Ölçüm: task-5-report.md §5.
     default_agent
     ;;
   crash)
