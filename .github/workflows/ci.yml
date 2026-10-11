@@ -48,7 +48,7 @@ jobs:
             "https://github.com/koalaman/shellcheck/releases/download/v${sc_ver}/shellcheck-v${sc_ver}.linux.x86_64.tar.gz"
           sudo tar -xzf "$sc_tmp/sc.tar.gz" -C "$sc_tmp"
           sudo install -m 0755 "$sc_tmp/shellcheck-v${sc_ver}/shellcheck" /usr/local/bin/shellcheck
-          rm -rf "$sc_tmp"
+          sudo rm -rf "$sc_tmp"   # tar root sahibi yaratti: silmek de sudo ister
           shellcheck --version | sed -n 's/^version: /kurulan shellcheck: /p'
 
       - name: shellcheck surumu
