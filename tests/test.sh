@@ -1,44 +1,132 @@
 #!/usr/bin/env bash
 # cachy-agent pasif test süiti — yıkıcı işlem YOK (kurulum/LLM çağrısı yapmaz).
 set -u
-G="\033[32m"; R="\033[31m"; N="\033[0m"
-PASS=0; FAIL=0
+G="\033[32m"; R="\033[31m"; Y="\033[33m"; N="\033[0m"
+PASS=0; FAIL=0; SKIP=0
 ok()   { PASS=$((PASS+1)); printf "${G}PASS${N}: %s\n" "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf "${R}FAIL${N}: %s — %s\n" "$1" "$2"; }
+# ATLANDI: ortam bu ölçümü taşıyamıyor (kurulum yok, systemd oturumu yok,
+# doğrulayıcı yok). SKIP exit code'u ETKİLEMEZ — yalnızca gerçek hata kırmızıdır.
+skip() { SKIP=$((SKIP+1)); printf "${Y}SKIP${N}: %s\n" "$1"; }
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-export PATH="$REPO/src/bin:$PATH"
 
-BIN="$HOME/.local/bin"
-STATE="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage"
+# --- GERÇEK KULLANICI AĞACLARI: suite onlara YAZMAMALI ----------------------
+# Yollar, XDG_* DEĞERLERİ EZİLMEDEN ÖNCE sabitlenir. 13h ve 17 bunları
+# kullanır; ikisi de "suite gerçek config/state'i değiştirmedi" iddiasını
+# ölçer. (Kullanıcı XDG_CONFIG_HOME ayarlamışsa o değer esas alınır —
+# aksi halde test, ürünün asla görmediği bir dosyayı "koruyor" derdi.)
+REAL_CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cachy-agent"
+REAL_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage"
+
+# --- HER ŞEY GECİCİ DİZİNDE (kurulum gereksinimi yok) -----------------------
+# Suite'in tek yazma kökü. `$HOME`'un altına HİÇBİR şey yazılmaz; blok 13'ün
+# sahte evi ve bu dizin birlikte EXIT trap'inde silinir.
+#
+# Neden XDG_* dışarıda çevriliyor: `cachy-agent` config'i
+#   ${XDG_CONFIG_HOME:-$HOME/.config}/cachy-agent/{agents.conf,default-agent}
+# üzerinden çözer. Test 3 varsayılan ajanı okuyup YAZIYOR; bu değişken
+# çevrilmezse kullanıcının gerçek ajanı değişir. `cachy-agent-agents` da aynı
+# kalıbı kullanır (bkz. 11*/13g) — iki taraf aynı kökü gördüğü için sözleşme
+# tutarlı kalır.
+SCRATCH_ROOT="$(mktemp -d)"
+SCRATCH="$SCRATCH_ROOT/genel"; mkdir -p "$SCRATCH"
+export XDG_CONFIG_HOME="$SCRATCH_ROOT/config"; mkdir -p "$XDG_CONFIG_HOME/cachy-agent"
+export XDG_STATE_HOME="$SCRATCH_ROOT/state";  mkdir -p "$XDG_STATE_HOME"
+# Blok 13 kendi sandbox'ında XDG_*'i unset ediyor; blok sonunda geri konur.
+SAVED_XDG_CONFIG="$XDG_CONFIG_HOME"
+SAVED_XDG_STATE="$XDG_STATE_HOME"
+
+# Gerçek kullanıcının durum/config ağacına dokunulmadığını kanıtlamak için
+# BAŞTA parmak izi alınır (test 17). Bunlar yalnızca OKUNUR.
+# `fingerprint`: dosya listesi + içerik cksum'u -> tek satır. Dizin yoksa "yok".
+# İSİM ÇAKIŞMASI TUZAGI: bu iki değişken BİLEREK `_TREE` sonlu olamaz — blok
+# 13'ün 13h testi `REAL_CONF_BEFORE` adını TEK DOSYANIN cksum'u için kullanıyor
+# ve değeri EZİYOR. Bu sessizdir: 17b kendi ağacının parmak izi yerine 13h'nin
+# tek dosya değerini karşılaştırır ve KIRMIZI olur (ölçülen hata).
+fingerprint() { [[ -d "$1" ]] || { echo "yok"; return; }; (cd "$1" && find . -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 -r cksum 2>/dev/null | cksum); }
+REAL_STATE_TREE_BEFORE="$(fingerprint "$REAL_STATE_DIR")"
+REAL_CONF_TREE_BEFORE="$(fingerprint "$REAL_CONF_DIR")"
+
+PFXROOT="$(mktemp -d)"
+trap 'rm -rf "${SCRATCH_ROOT:-}" "${PFXROOT:-}"' EXIT
+
+# --- BIN: kurulum değil, çalışma ağacı ---------------------------------------
+# `CACHY_AGENT_TEST_PREFIX` yalnızca ölçüm/deney için; varsayılan src/bin.
+# DİKKAT: bu dizin yalnızca `cachy-agent` gibi TEKİL çağrılara uygundur;
+# `cachy-agent-usage-update` kardeşlerini `CACHY_AGENT_BIN_DIR`'dan çözer
+# (aşağıdaki 6b bloğu). Boşluğa düşmemek için her ikisi de ayrı ayrı sabit.
+BIN="${CACHY_AGENT_TEST_PREFIX:-$REPO/src/bin}"
+export PATH="$BIN:$PATH"
+STATE="$XDG_STATE_HOME/cachy-agent/agents/usage"
 
 # 1. sözdizimi: bash -n + py_compile
-# NOT hangi ağacın sınandığı: $BIN = KURULU ağaç (~/.local/bin), ayrıca
-# $REPO/src/bin = ÇALIŞMA ağacı. PATH'te repo önde olduğu için test 2-7 artık
-# çalışma ağacını çalıştırıyor; ama kurulu ağaç da bozulmamalı. İkisi de taranır
-# (yeni dosyalar — ör. cachy-agent-agents — yalnızca çalışma ağacında olabilir).
-t1_ok=1; t1_msg=""
-for f in "$BIN"/cachy-* "$REPO"/src/bin/cachy-*; do
+# NOT hangi ağacın sınandığı: artık YALNIZCA çalışma ağacı ($REPO/src/bin).
+# v0.1.0'de burada `~/.local/bin` de taranıyordu; bu, suite'i "bu makinede
+# kurulu olan sürüm"in doğruluğuna bağımlı kılıyordu — temiz checkout'ta o
+# dizin yok, kurulu ağacın bozuk olması da bu deponun testi değildir.
+# Kurulu ağacı tutmak isteyen kullanıcı kendi ayrı kontrolünü yapar.
+t1_ok=1; t1_msg=""; t1_n=0
+for f in "$REPO"/src/bin/cachy-*; do
   [[ -e "$f" ]] || continue
   case "$f" in *.py) continue;; esac
+  t1_n=$((t1_n+1))
   if head -1 "$f" | grep -q bash; then
     if ! bash -n "$f" 2>/tmp/cachy-t1.err; then t1_ok=0; t1_msg="$t1_msg$(basename "$f"): $(cat /tmp/cachy-t1.err); "; fi
   fi
 done
-if ! python3 -m py_compile "$BIN/cachy-notify-action.py" 2>/tmp/cachy-t1py.err; then t1_ok=0; t1_msg="$t1_msg py_compile: $(cat /tmp/cachy-t1py.err); "; fi
-if [[ $t1_ok == 1 ]]; then ok "1 bash -n + py_compile"; else bad "1 bash -n + py_compile" "$t1_msg"; fi
+# py_compile çıktısı yanına __pycache__ bırakır; kaynak ağacı kirletmesin diye
+# cfile geçici köke yazılır. (`cfile=/dev/null` Python 3.14'te FileExistsError
+# veriyor: "non-regular file" — bu yüzden dosya yolu kullanılıyor.)
+if ! python3 -c 'import py_compile,sys; py_compile.compile(sys.argv[1], cfile=sys.argv[2], doraise=True)' \
+     "$REPO/src/bin/cachy-notify-action.py" "$SCRATCH_ROOT/notify.pyc" 2>/tmp/cachy-t1py.err; then
+  t1_ok=0; t1_msg="$t1_msg py_compile: $(cat /tmp/cachy-t1py.err); "
+fi
+if [[ $t1_ok == 1 && $t1_n -gt 0 ]]; then ok "1 bash -n + py_compile ($t1_n script)"; else bad "1 bash -n + py_compile" "script=$t1_n $t1_msg"; fi
 
 # 2. --help exit 0 + "Kullanım"
 out=$(cachy-agent --help 2>&1); rc=$?
 if [[ $rc == 0 && "$out" == *"Kullanım"* ]]; then ok "2 --help"; else bad "2 --help" "exit=$rc, 'Kullanım' yok"; fi
 
 # 3. default mevcut değeri basar; uydurma exit 1 (dosyaya yazmaz)
-cur=$(cat "$HOME/.config/cachy-agent/default-agent" 2>/dev/null || echo "opencode")
+#
+# YOL İZOLE EDİLDİ: `cachy-agent` config'i
+#   ${XDG_CONFIG_HOME:-$HOME/.config}/cachy-agent/{agents.conf,default-agent}
+# üzerinden çözer. Suite başında XDG_CONFIG_HOME geçici köke çevrildiği için
+# buradaki okuma/YAZMA testin kendi alanındadır; kullanıcının gerçek
+# `default-agent` dosyasına dokunulmaz. (v0.1.0'de test 3 gerçek dosyayı
+# okuyor, hatta `default` komutuyla YAZIYORDU.)
+DEF_FILE="$XDG_CONFIG_HOME/cachy-agent/default-agent"
+cur=$(cat "$DEF_FILE" 2>/dev/null || echo "opencode")
 got=$(cachy-agent default 2>&1); rc=$?
 if [[ $rc == 0 && "$got" == "$cur" ]]; then ok "3a default gösterir ($cur)"; else bad "3a default gösterir" "exit=$rc got='$got' beklenen='$cur'"; fi
 if cachy-agent default uydurma >/dev/null 2>&1; then bad "3b default uydurma" "exit 0 döndü, 1 bekleniyordu"; else ok "3b default uydurma exit 1"; fi
-after=$(cat "$HOME/.config/cachy-agent/default-agent" 2>/dev/null || echo "opencode")
+after=$(cat "$DEF_FILE" 2>/dev/null || echo "opencode")
 if [[ "$after" == "$cur" ]]; then ok "3c default dosyası değişmedi"; else bad "3c default dosyası değişmedi" "'$cur' -> '$after'"; fi
+
+# 3d/3e. İZOLASYONUN KENDİSİ: `default` komutu gerçekten geçici kökü okuyor.
+# 3a tek başına bunu kanıtlamaz — gerçek `~/.config` okunsa da "mevcut değer"
+# ile eşleşirdi. Burada `default codex` YAZILIR (geçici köke), sonra okuma
+# `codex` vermek zorundadır; ardından dosya SİLİNİR ve `opencode`'a düşülür.
+# Bu iki yönlü kontrol, "config yolu yanlış çözülürse" senaryosunu kırmızı
+# yapar (dosya yanlış yere yazılırsa 3d okuma codex vermez; dosya temizlenmezse
+# 3e opencode vermez).
+printf 'codex\n' > "$DEF_FILE"
+got3d=$(cachy-agent default 2>&1); rc=$?
+rm -f "$DEF_FILE"
+got3e=$(cachy-agent default 2>&1); rc2=$?
+if [[ $rc -eq 0 && "$got3d" == "codex" ]]; then
+  ok "3d default geçici config'i okuyor (XDG_CONFIG_HOME izole)"
+else
+  bad "3d config izolasyonu" "rc=$rc got='$got3d' (codex bekleniyordu)"
+fi
+# 3e, `default_agent()` fallback'ının ÖLÇÜMÜDÜR: dosya yokken komut exit 1
+# verip ham `cat:` hatası basıyordu (bkz. task-5-report.md §3, ürün hatası).
+if [[ $rc2 -eq 0 && "$got3e" == "opencode" ]]; then
+  ok "3e default dosya yoksa opencode'a düşüyor (sıfırdan bağımsız)"
+else
+  bad "3e varsayılan düşüş" "rc=$rc2 got='$got3e' (opencode bekleniyordu)"
+fi
 
 # 4. --prompt argümansız exit 1 + usage
 out=$(cachy-agent --prompt 2>&1); rc=$?
@@ -49,13 +137,64 @@ out=$(cachy-agent --pick uydurma </dev/null 2>&1); rc=$?
 if [[ $rc == 1 ]]; then ok "5 --pick uydurma"; else bad "5 --pick uydurma" "exit=$rc out='$out'"; fi
 
 # 6. usage-update exit 0 + 3 JSON geçerli
-if cachy-agent-usage-update >/dev/null 2>&1; then ok "6a usage-update exit 0"; else bad "6a usage-update exit 0" "exit=$?"; fi
+#
+# AĞSIZ/ŞİFRESİZ: gerçek kolektörler ÇALIŞTIRILMAZ. `cachy-agent-usage-codex`
+# `~/.codex/auth.json` okuyup AĞ RPC'si yapar; `...-opencode` de kimlik
+# bilgisi ister. Bunlar v0.1.0'de gerçekten çalışıyordu — yani suite ağa,
+# kimlik bilgisine ve o makinede kurulu ajan CLIs'ine bağımlıydı.
+#
+# Yerine `$SCRATCH_ROOT/coll/` altına SABİT JSON basan üç stub konur ve
+# `CACHY_AGENT_BIN_DIR` (Task 3'ün seam'i) ile oraya yönlendirilir. Aynı
+# değişken katalog okuyucusu (`cachy-agent-agents`) içindir; sahte okuyucu
+# config okuma yolunu test etmezdi diye GERÇEK olan kopyalanır.
+#
+# Yazma hedefi de geçici: XDG_STATE_HOME suite başında yönlendirildiği için
+# kullanıcının gerçek kullanım verisi ezilmez (test 17 bunu ayrıca ölçer).
+SC6B="$SCRATCH_ROOT/coll"; mkdir -p "$SC6B"
+cp "$REPO/src/bin/cachy-agent-agents" "$SC6B/cachy-agent-agents"
+# Katalog: deponun KENDI agents.conf'i, OKUNARAK. Kullanıcının
+# `~/.config/cachy-agent/agents.conf`'i değil — o dosya bu makinede başka bir
+# ajan listesi taşıyor olabilir ve test onun varlığına bağımlı olmamalı.
+# Katalog 8 id verir, stub'lar 3'ü -> tam olarak 3 JSON yazılmalı (ne eksik
+# ne fazla: 6d bunu ayrıca ölçer).
+C6B_CONF="$REPO/src/config/agents.conf"
+for a in opencode codex copilot; do
+  cat > "$SC6B/cachy-agent-usage-$a" <<EOF
+#!/usr/bin/env bash
+# Sabit JSON: hiçbir ağ çağrısı, hiçbir credential okuması yok.
+printf '{"schemaVersion":1,"id":"$a","name":"STUB $a","updatedAt":"2026-10-06T00:00:00Z","ready":true,"tierLabel":"test","limits":[{"label":"stub","percent":7}],"todayPrompts":3,"todaySessions":1,"todayTotalTokens":100,"totalPrompts":9,"totalSessions":4,"totalTokens":900,"reason":"stub"}'
+EOF
+  chmod +x "$SC6B/cachy-agent-usage-$a"
+done
+CACHY_AGENT_CONFIG="$C6B_CONF" CACHY_AGENT_BIN_DIR="$SC6B" \
+  cachy-agent-usage-update >/dev/null 2>&1; rc=$?
+if [[ $rc -eq 0 ]]; then ok "6a usage-update exit 0"; else bad "6a usage-update exit 0" "exit=$rc"; fi
 n=0; badjson=""
 for f in "$STATE"/*.json; do
   [[ -e "$f" ]] || break
   if python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f" 2>/dev/null; then n=$((n+1)); else badjson="$badjson$(basename "$f") "; fi
 done
 if [[ $n -ge 3 && -z "$badjson" ]]; then ok "6b $n JSON geçerli"; else bad "6b JSON geçerli" "geçerli=$n bozuk='$badjson' (en az 3 bekleniyor)"; fi
+
+# 6d. JSON'lar GERÇEK Kolektörden değil STUB'dan geldi — ağ/credential
+# kanıtı. 6b yalnızca "geçerli JSON var" diyordu; aynı dosyaları gerçek
+# `cachy-agent-usage-codex` de üretebilirdi (ve `~/.codex/auth.json` okurdu).
+# Burada `name` alanındaki `STUB ` işareti aranır: işaretli dosya sayısı 3'ün
+# altındaysa ya da beklenmeyen dosya varsa gerçek kolektör devreye girmiştir.
+d_stub=0; d_bad=""
+for f in "$STATE"/*.json; do
+  [[ -e "$f" ]] || break
+  if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("name","").startswith("STUB ") else 1)' "$f" 2>/dev/null; then
+    d_stub=$((d_stub+1))
+  else
+    d_bad="$d_bad$(basename "$f") "
+  fi
+done
+if [[ $d_stub -ge 3 && -z "$d_bad" ]]; then
+  ok "6d collector'lar sahte JSON basti (ağ/credential kullanilmadi)"
+else
+  bad "6d sahte collector kaniti" "isaretli=$d_stub gercek_cikan='$d_bad' (3 bekleniyordu)"
+fi
 
 # 6c. IZLENEN KUME config'in id listesiyle BIREBIR ayni olmali (I-4).
 # 6a boştu: `mapfile` + `continue` katalog tamamen yokken de exit 0 donuyordu,
@@ -87,7 +226,9 @@ EOF
 chmod +x "$SC6/coll/cachy-agent-usage-gizli"
 CACHY_AGENT_CONFIG="$SC6/agents.conf" CACHY_AGENT_BIN_DIR="$SC6/coll" XDG_STATE_HOME="$SC6/state" \
   cachy-agent-usage-update >/dev/null 2>&1; rc=$?
-got6c="$(ls -1 "$SC6/state/cachy-agent/agents/usage" 2>/dev/null | sed 's/\.json$//' | sort | tr '\n' ' ')"
+# `LC_ALL=C`: 13b-4'teki gerekçeyle aynı — karşılaştırma collation'a bağımlı
+# olursa test, tr_TR altında kazara ya da kazara kırmızı olur.
+got6c="$(ls -1 "$SC6/state/cachy-agent/agents/usage" 2>/dev/null | sed 's/\.json$//' | LC_ALL=C sort | tr '\n' ' ')"
 want6c="s1 s2 s3 "
 if [[ $rc == 0 && "$got6c" == "$want6c" ]]; then
   ok "6c usage-update config id listesiyle birebir ayni"
@@ -97,23 +238,70 @@ fi
 rm -rf "$SC6"
 
 # 7. cachy-agent usage exit 0
-if cachy-agent usage >/dev/null 2>&1; then ok "7 usage exit 0"; else bad "7 usage exit 0" "exit=$?"; fi
+# 6b'nin ürettiği JSON'ları OKUMALI: çıktıda 6d'nin stub id'leri görünmeli.
+# Yalnızca exit 0'a bakmak "kayıt yok" mesajıyla da geçerdi (kayıt yoksa
+# script yine 0 döner) — yani test, verinin gerçekten okunduğunu ölçmezdi.
+out7=$(cachy-agent usage 2>&1); rc=$?
+if [[ $rc -eq 0 && "$out7" == *"opencode: today=3"* && "$out7" == *"codex: today=3"* && "$out7" == *"copilot: today=3"* ]]; then
+  ok "7 usage exit 0 + 6b kayitlarini okuyor"
+else
+  bad "7 usage" "rc=$rc out='$(printf '%s' "$out7" | tr '\n' ' ')'"
+fi
 
-# 8. servis dosyaları + crash-watch active
-sdir="$HOME/.config/systemd/user"
-sok=1; smsg=""
+# 8. systemd: kaynak unit'ler her yerde, KURULU/AKTIF olan ortam varsa
+#
+# İkiye ayrıldı. Kaynak dosyaların VARLIĞI her checkout'ta ölçülebilir ve
+# ölçülmelidir (birim kaybolursa sessizce ürünü bozar). "Kurulu ve aktif" ise
+# ortamın DURUMUDUR: temiz checkout'ta, CI'da, systemd'siz konteynerde yoktur
+# ve yokluğu ürünün hatası değildir -> SKIP.
+#
+# 8b'de `systemctl --user is-active` yalnızca SORGUDUR (enable/disable/stop
+# çağrısı YOKTUR) ve blok 13'ün `systemctl` stub'ı devrede değildir; yani
+# gerçek oturuma yazma yapan hiçbir yol açılmaz.
 for s in cachy-crash-watch.service cachy-agent-usage-refresh.service cachy-agent-usage-refresh.timer; do
-  [[ -f "$sdir/$s" ]] || { sok=0; smsg="$smsg$s yok; "; }
+  if [[ -f "$REPO/src/systemd/$s" ]]; then
+    ok "8a kaynak unit mevcut: $s"
+  else
+    bad "8a kaynak unit" "$REPO/src/systemd/$s yok — ürün unit'i kaybetti"
+  fi
 done
-st=$(systemctl --user is-active cachy-crash-watch 2>&1 || true)
-[[ "$st" == "active" ]] || { sok=0; smsg="$smsg is-active='$st'; "; }
-if [[ $sok == 1 ]]; then ok "8 servisler + crash-watch active"; else bad "8 servisler + crash-watch" "$smsg"; fi
+if command -v systemctl >/dev/null 2>&1 && [[ -d "$HOME/.config/systemd/user" ]] \
+   && [[ -f "$HOME/.config/systemd/user/cachy-crash-watch.service" ]]; then
+  sok=1; smsg=""
+  for s in cachy-crash-watch.service cachy-agent-usage-refresh.service cachy-agent-usage-refresh.timer; do
+    [[ -f "$HOME/.config/systemd/user/$s" ]] || { sok=0; smsg="$smsg$s yok; "; }
+  done
+  # YALNIZCA okuma: `is-active` hiçbir servisi değiştirmez.
+  st=$(systemctl --user is-active cachy-crash-watch 2>&1 || true)
+  [[ "$st" == "active" ]] || { sok=0; smsg="$smsg is-active='$st'; "; }
+  if [[ $sok == 1 ]]; then ok "8b servisler + crash-watch active"; else bad "8b servisler + crash-watch" "$smsg"; fi
+else
+  skip "8b kurulu/aktif servis kontrolu (ortam yok: systemctl veya ~/.config/systemd/user yok)"
+fi
 
-# 9. desktop-file-validate temiz
-d1="$HOME/.local/share/applications/cachy-agent.desktop"
-d2="$HOME/.local/share/applications/cachy-agent-usage.desktop"
-dv=$(desktop-file-validate "$d1" "$d2" 2>&1); rc=$?
-if [[ $rc == 0 && -z "$dv" ]]; then ok "9 desktop-file-validate"; else bad "9 desktop-file-validate" "exit=$rc out='$dv'"; fi
+# 9. desktop-file-validate — KAYNAK dosyalar, `__HOME__` genişletilerek
+# v0.1.0'da `~/.local/share/applications` KURULU olan kopyaları doğrulanıyordu;
+# bu da suite'i o makinedeki kuruluma bağımlı kılıyordu. Artık kaynak ağaçtaki
+# `src/applications/*.desktop` doğrulanıyor; doğrulayıcı yoksa SKIP.
+#
+# `__HOME__` geçici köke genişletiliyor (smoke.sh:58-64 deseni) çünkü
+# doğrulayıcı Exec= yolunun biçimini kontrol eder ve placeholder'ı kabul etmez.
+# Genişletme sonrası artık `__HOME__` KALMAMASI da ayrıca ölçülür: yalnızca
+# "söz dizimi geçerli" demek, `__HOME__` genişletmesi bozulursa yeşil kalırdı.
+if command -v desktop-file-validate >/dev/null 2>&1; then
+  DV_DIR="$SCRATCH_ROOT/dv"; mkdir -p "$DV_DIR"
+  dok=1; dvmsg=""
+  for f in "$REPO"/src/applications/*.desktop; do
+    b="$(basename "$f")"
+    sed "s|__HOME__|$SCRATCH_ROOT|g" "$f" > "$DV_DIR/$b"
+    if grep -q '__HOME__' "$DV_DIR/$b"; then dok=0; dvmsg="$dvmsg$b:__HOME__ kaldi; "; fi
+    o=$(desktop-file-validate "$DV_DIR/$b" 2>&1); r=$?
+    [[ $r -eq 0 && -z "$o" ]] || { dok=0; dvmsg="$dvmsg$b:exit=$r:$o; "; }
+  done
+  if [[ $dok == 1 ]]; then ok "9 desktop-file-validate (kaynak, __HOME__ genisletilmis)"; else bad "9 desktop-file-validate" "$dvmsg"; fi
+else
+  skip "9 desktop-file-validate (ortam yok: desktop-file-validate komutu bulunamadi)"
+fi
 
 # 10. menu seçim mantığı (stub fuzzel/alacritty/install — gerçek çalıştırma yok)
 # Artık ÇALIŞMA AĞACININ menüsü sınanır (kurulu ~/.local/bin kopyası değil):
@@ -358,11 +546,10 @@ unset CACHY_AGENT_BIN_DIR
 rm -rf "$STUB"
 
 # 11. agents.conf parse + check
-SCRATCH=$(mktemp -d)
-# PFXROOT: sonraki görevlerin (13/14/15/16) kurulum/argv testleri kullanacak;
-# burada ayrılır, bu blokta henüz tüketilmez.
-PFXROOT=$(mktemp -d)
-trap 'rm -rf "$SCRATCH" "$PFXROOT"' EXIT
+# `SCRATCH`, `PFXROOT`, `REPO` ve EXIT trap'i dosyanın BAŞINDA tanımlıdır:
+# 2/3/6/7 numaralı bloklar XDG_* çevrimi yüzünden aynı geçici köke ihtiyaç
+# duyuyor ve trap'in onları da temizlemesi gerekiyor. Burada YENİDEN
+# tanımlanmazlar (ikinci bir mktemp, ilkini yarım bırakırdı).
 AG="$REPO/src/bin/cachy-agent-agents"
 FIX="$REPO/tests/fixtures"
 
@@ -645,7 +832,14 @@ if locale -a 2>/dev/null | grep -qi '^tr_TR\.utf-\?8$'; then
   # Ters yön: locale SABİTLENMELİ, sadece reddedilmeme değil. tr collation
   # altında `ı` normal ASCII değildir; C collation'da da reddedilmesi gerekir
   # ama gerekçe farklıdır. Asıl ölçüm: i doğru kabul ediliyor.
-  got16=$(LC_ALL=tr_TR.UTF-8 "$AG" get copilot name 2>/dev/null)
+  # `CACHY_AGENT_CONFIG` BURADA ŞART: 16b config'i ortamdan çözer
+  # (${CACHY_AGENT_CONFIG:-${XDG_CONFIG_HOME:-...}/cachy-agent/agents.conf}).
+  # Suite başında XDG_CONFIG_HOME geçici köke çevrildiği için — ve o kökte
+  # agents.conf YOKTUR — sabitlemesiz bu çağrı "config dosyası yok" deyip boş
+  # dönüyor ve test sessizce kırmızı oluyordu. (Bu, blok 11'in en sonda
+  # `unset CACHY_AGENT_CONFIG` dediği için 16'ya sızıyordu.)
+  got16=$(LC_ALL=tr_TR.UTF-8 CACHY_AGENT_CONFIG="$REPO/tests/fixtures/agents-valid.conf" \
+    "$AG" get copilot name 2>/dev/null)
   if [[ "$got16" == "Copilot CLI" ]]; then
     ok "16b get tr_TR altinda dogru alan donuyor"
   else
@@ -671,7 +865,7 @@ if locale -a 2>/dev/null | grep -qi '^tr_TR\.utf-\?8$'; then
     bad "16d turkce karakterler" "got='$got16c'"
   fi
 else
-  printf 'SKIP: 16 (tr_TR.UTF-8 locale yok — locale -a kontrol et)\n'
+  skip "16 tr_TR.UTF-8 locale kontrolleri (ortam yok: locale -a kontrol et)"
 fi
 
 # 13. install.sh --prefix / uninstall.sh --prefix
@@ -738,10 +932,11 @@ export SB_LOG="$PFXROOT/hostcalls.log"
 # Gerçek $HOME saklanıyor: blok sonunda geri alınacak. 13h tek başına
 # yeterli değil — sahte ev komple taranıyor (13j) ve PATH stub'ı çıkarılıyor.
 REAL_HOME="$HOME"
-# 13h GERÇEK config'i izleyecek. $HOME sandbox'a çevrileceği için bu yol
-# ÖNCE sabitlenmeli; yoksa 13h kendi yazdığı sahte config'i "değişmedi"
-# bulur ve BOŞ GEÇER.
-REAL_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/cachy-agent/agents.conf"
+# 13h GERÇEK config'i izleyecek. Yol dosyanın BAŞINDA sabitlendi (REAL_CONF_DIR)
+# — burada yeniden türetmek YANLIŞ olurdu: suite başında XDG_CONFIG_HOME geçici
+# köke çevrildiği için `${XDG_CONFIG_HOME:-$HOME/.config}` artık SAHTE config'i
+# gösterirdi ve 13h kendi yazdığı sahte config'i "değişmedi" bulup BOŞ GEÇERdi.
+REAL_CONF="$REAL_CONF_DIR/agents.conf"
 REAL_CONF_BEFORE="yok"
 [[ -f "$REAL_CONF" ]] && REAL_CONF_BEFORE=$(cksum < "$REAL_CONF")
 
@@ -1015,8 +1210,33 @@ fi
 # kaydetmiş olduğumuz REAL_HOME kullanılır (sandbox $HOME'yu değiştirdi).
 export PATH="${PATH#"$SB_STUB":}"
 export HOME="$REAL_HOME"
+# Sandbox, XDG_*'i UNSET etmişti (C1'nin (1) katmanı: gerçek XDG_CONFIG_HOME
+# kaçık yol olurdu). Blok bittikten sonra GERİ konur — 14/15 kendi ortamını
+# kursa da, sonraki blokların geçici köke bağlı kaldığı varsayılıyor.
+export XDG_CONFIG_HOME="$SAVED_XDG_CONFIG"
+export XDG_STATE_HOME="$SAVED_XDG_STATE"
 unset SB_LOG
 rm -rf "$SB_STUB" "$SB_HOME"
+
+# 17. İZOLASYON KANITI: suite gerçek kullanıcının config/state ağacına
+# DOKUNMADI. Suite'in başında alınan parmak izleriyle karşılaştırılır.
+#
+# Bu, "kurulum gerektirmez" iddiasının EN SOMUT ölçümü: yeşil geçmek için
+# gerçek `~/.config/cachy-agent` ve `~/.local/state/cachy-agent` ağaçlarının
+# içeriği (dosya listesi + cksum) değişmiş OLMAMALI. Test 3/6/7 geçici köke
+# yazıyor; 13h ise tek config dosyasına bakıyordu (ağacın tamamına değil).
+f_state_after="$(fingerprint "$REAL_STATE_DIR")"
+f_conf_after="$(fingerprint "$REAL_CONF_DIR")"
+if [[ "$REAL_STATE_TREE_BEFORE" == "$f_state_after" ]]; then
+  ok "17a gercek ~/.local/state/cachy-agent/agents/usage degismedi"
+else
+  bad "17a gercek state dizini degisti" "once=$REAL_STATE_TREE_BEFORE sonra=$f_state_after"
+fi
+if [[ "$REAL_CONF_TREE_BEFORE" == "$f_conf_after" ]]; then
+  ok "17b gercek ~/.config/cachy-agent degismedi"
+else
+  bad "17b gercek config dizini degisti" "once=$REAL_CONF_TREE_BEFORE sonra=$f_conf_after"
+fi
 
 # --- Task 2: argv differential (spec §8.1/§8.2) ---
 # Bu ikisi GOLDEN FILE testleridir: refactor ÖNCESİ de geçerler, çünkü mevcut
@@ -1038,5 +1258,7 @@ if [[ $rc -eq 0 && "$argv_out" == "argv: 18 ölçüm tamam" ]]; then
   ok "15 argv differential (18 olcum)"
 else bad "15 argv differential" "rc=$rc out='$(printf '%s' "$argv_out" | tr '\n' ' ')'"; fi
 
-printf '\nÖzet: %d geçti, %d kaldı (toplam %d)\n' "$PASS" "$FAIL" "$((PASS+FAIL))"
+# SKIP exit code'u ETKİLEMEZ: yalnızca gerçek kırmızılar (FAIL) hata sayılır.
+# Atlanan testler ortam eksikliğidir, ürün hatası değil.
+printf '\nÖzet: %d geçti, %d kaldı, %d atlandı (toplam %d)\n' "$PASS" "$FAIL" "$SKIP" "$((PASS+FAIL+SKIP))"
 [[ $FAIL == 0 ]]
