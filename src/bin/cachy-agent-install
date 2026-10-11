@@ -1,32 +1,51 @@
 #!/usr/bin/env bash
 # cachy-agent-install <name> - eksik agent CLI'yi resmi yoluyla kurar
+# Kurulum komutu agents.conf'un `install` alanından gelir; "-" ise harici
+# kurulumdur (bu script kurmaz). Config: cachy-agent-agents get <id> install.
 set -euo pipefail
+# Katalog okuyucu PATH'e BAKILMAZ: bu script alacritty içinden çağrılır ve
+# ~/.local/bin PATH'te olmayabilir (Ruling 10). Aynı $BIN değişkeni
+# `CACHY_AGENT_BIN_DIR` ile ezilebilir.
+BIN="${CACHY_AGENT_BIN_DIR:-$HOME/.local/bin}"
+AGENTS_BIN="$BIN/cachy-agent-agents"
 NAME="${1:-}"
-case "$NAME" in
-  claude|codex|crush|copilot|cursor-agent|grok) ;;
-  *) echo "bilinmeyen agent: $NAME" >&2; exit 1 ;;
-esac
-read -rp "$NAME kurulacak (opencode/agy hariç harici kurulum). Devam? [E/h] " ans || true
-[[ "${ans:-}" =~ ^[HhnN] ]] && echo "Vazgeçildi." && exit 0
-case "$NAME" in
-  claude) npm i -g @anthropic-ai/claude-code ;;
-  codex) npm i -g @openai/codex ;;
-  crush) npm i -g @charmlabs/crush ;;
-  copilot) npm i -g @github/copilot ;;
-  cursor-agent) curl https://cursor.com/install -fsS | bash ;;
-  grok) curl -fsSL https://x.ai/cli/install.sh | bash ;;
-  *) echo "bilinmeyen agent: $NAME" >&2; exit 1 ;;
-esac
+# Config'in İKİ alanı da ONAYDAN ÖNCE, ARD ARDA okunur (M-3). Eskiden
+# `login` sorgusu kurulum komutu ÇALIŞTIKTAN SONRA yapılıyordu: kullanıcı
+# bu arada config'i düzenlerse kurulum komutu ile giriş ipucu farklı iki
+# anlık görüntüden gelirdi, ayrıca config okunamaz olursa "OK: kuruldu"
+# yazdıktan sonra `set -e` sessizce kesiyordu.
+cmd="$("$AGENTS_BIN" get "$NAME" install)"
+login="$("$AGENTS_BIN" get "$NAME" login 2>/dev/null || true)"
+
+if [[ -z "$cmd" || "$cmd" == "-" ]]; then
+  echo "$NAME için otomatik kurulum yok (harici kurulum)" >&2; exit 1
+fi
+# --- ONAY ZORUNLULUĞU (I-1) ---
+# v0.1.0'de `read ... || true` EOF'u yutup `ans` boş kalınca kontrol
+# düşüyor ve kurulum SORULMADAN çalışıyordu. Task 3 kurulum payload'unı
+# script'teki altı sabitten kullanıcı düzenleyebilir bir dosyaya taşıdığı
+# için bu delik artık "herhangi bir TTY dışı çağrı agents.conf'taki komutu
+# sorusuz çalıştırır" haline geldi. `|| true` KALDIRILDI: `read` başarısız
+# olursa (EOF / kapalı stdin) bu artık onay alınamadı demektir.
+if [[ ! -t 0 ]]; then
+  # Önce bu kontrol: TTY yoksa `read` sessizce EOF döner ve kullanıcıya
+  # "Devam?" yazdıktan sonra hiçbir şey olmadığını sanır.
+  echo "cachy-agent-install: etkileşimli terminal gerekli (kurulum onayı alınamadı)" >&2
+  exit 1
+fi
+read -rp "$NAME kurulacak (harici kurulum). Devam? [E/h] " ans
+if [[ "${ans:-}" =~ ^[HhnN] ]]; then echo "Vazgeçildi."; exit 0; fi
+# ~ ve $HOME genişletmesi kurulum komutunun kendi bash'ine bırakılır.
+bash -c "$cmd"
 if command -v "$NAME" >/dev/null 2>&1; then
   echo "OK: $NAME kuruldu."
-  case "$NAME" in
-    claude) echo "Son adım: terminalde 'claude login' ile giriş yap." ;;
-    codex) echo "Son adım: terminalde 'codex login' ile giriş yap." ;;
-    copilot) echo "Son adım: terminalde 'copilot login' ile giriş yap." ;;
-    cursor-agent) echo "Son adım: terminalde 'agent login' ile giriş yap." ;;
-    grok) echo "Son adım: terminalde 'grok login' ile giriş yap." ;;
-  esac
-  exec cachy-agent --inline "$NAME"
+  # `login` sorgusu ONAYDAN ÖNCE yapıldı (yukarıda): config okunamaz olursa
+  # "OK: kuruldu" yazdıktan SONRA `set -e` sessizce kesip kullanıcıyı
+  # sebepsiz bırakıyordu. "-" ise giriş adımı yok -> bu satır atlanır.
+  if [[ -n "$login" && "$login" != "-" ]]; then
+    echo "Son adım: terminalde '$login' ile giriş yap."
+  fi
+  exec "$BIN/cachy-agent" --inline "$NAME"
 else
   echo "Kurulum tamamlanamadı ($NAME bulunamadı). Çıktıdaki hataya bak." >&2
   read -rp "Çıkmak için Enter..."

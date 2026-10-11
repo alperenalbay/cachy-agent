@@ -1,23 +1,49 @@
 #!/usr/bin/env bash
 # cachy-agent-usage-update - kullanım kolektörleri orkestratörü
 # Kullanım: cachy-agent-usage-update [agent...]
-# Argümansız: opencode agy claude codex crush copilot cursor-agent grok. Verilirse sadece onları çalıştır.
+# Argümansız: agents.conf'taki TÜM agentlar (cachy-agent-agents list).
+# Verilirse sadece onları çalıştırır.
 # Her kolektör (timeout 30) stdout JSON'u doğrulanıp
 # ~/.local/state/cachy-agent/agents/usage/<agent>.json yoluna atomik yazılır.
 # Başarısız kolektör veya kolektörü olmayan agent sessizce atlanır, exit 0 korunur.
 set -u
-BIN_DIR="$HOME/.local/bin"
+# Katalog okuyucu ve koleksiyon dizini AYNI $BIN'den gelir (Ruling 10).
+# systemd --user unit'inin PATH'i login shell'inkinden farklıdır; bare
+# `cachy-agent-agents` çağrısı orada `command not found` (rc 127) veriyor ve
+# `mapfile < <(...)` bunu YUTUYORDU — script rc 0 dönüp sıfır dosya yazıyordu,
+# yani kullanım verisi 15 dakikada bir sessizce ölüyordu. `CACHY_AGENT_BIN_DIR`
+# testler ve denemeler için bu dizini ezer; sözleşmesi cachy-agent-menu'da
+# yazılıdır (aynı dizin katalog okuyucusu, `cachy-agent` ve `cachy-agent-usage-*`
+# koleksiyonlarının HEPSİNİ barındırmalıdır).
+BIN="${CACHY_AGENT_BIN_DIR:-$HOME/.local/bin}"
+BIN_DIR="$BIN"
+AGENTS_BIN="$BIN/cachy-agent-agents"
 OUT_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage"
 
 if [[ $# -gt 0 ]]; then
   AGENTS=("$@")
 else
-  AGENTS=(opencode agy claude codex crush copilot cursor-agent grok)
+  # Config okunamazsa liste boş gelir -> döngü hiç çalışmaz, exit 0 korunur
+  # ("sessizce atla" davranışı değişmez).
+  #
+  # stderr BURADA KASTEN SUSTURULMAZ. Bu script systemd timer ile 15 dakikada
+  # bir çalışır; config bozuksa `cachy-agent-agents` tek satır hatayı stderr'a
+  # basar ve kullanım verisi sessizce ölür. Sıfır çıktı + exit 0 "her şey yolunda"
+  # izlenimi yaratırdı. Tek satırlık journal gürültüsü, kullanıcının verinin
+  # neden durduğunu göremesine yeğdir.
+  #
+  # `mapfile`'in KENDİ exit kodu her zaman 0'dır; asıl sorgunun kodu ayrı
+  # yakalanmalıdır (I-3). Sorgu başarısızsa liste boş kalır, döngü hiç
+  # çalışmaz ve kullanıcı hatayı stderr'dan görmüş olur.
+  ajanlar="$("$AGENTS_BIN" list)" || ajanlar=""
+  # `mapfile <<< ""` TEK bir boş eleman üretir (sıfır değil); döngü bir kez
+  # boş isimle döner. `clean` boş olduğu için `continue` zaten atlar, ama
+  # boş girdide diziyi hiç doldurmamak daha dürüst.
+  if [[ -n "$ajanlar" ]]; then mapfile -t AGENTS <<< "$ajanlar"; fi
 fi
 
 mkdir -p "$OUT_DIR"
 
-rc=0
 for agent in "${AGENTS[@]}"; do
   # Sadeleştir: yol traversal engelle
   clean="$(printf '%s' "$agent" | tr -cd 'A-Za-z0-9_-')"
@@ -28,7 +54,14 @@ for agent in "${AGENTS[@]}"; do
   fi
   out="$(timeout 30 "$collector" 2>/dev/null)" || continue
   [[ -z "$out" ]] && continue
-  if ! printf '%s' "$out" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+  # JSON doğrulaması: program heredoc'ta, veri argv'de. Eski tek satırlık
+  # gömülü doğrulama smoke.sh'ın "src/ içinde gömülü python yok" taramasına
+  # takılıyordu; davranış aynı — parse edilemeyen kolektör çıktısı atlanır.
+  if ! python3 - "$out" 2>/dev/null <<'PY'
+import json, sys
+json.loads(sys.argv[1])
+PY
+  then
     continue
   fi
   tmp="$OUT_DIR/$clean.json.tmp.$$"

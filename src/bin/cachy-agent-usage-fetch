@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# cachy-agent-usage-fetch - kullanım kayıtlarını okuyup iki biçimde basar
+#
+#   (varsayılan)  {"providers":[{"id","name","today","total",
+#                   "limits":[{"label","percent","resetsAt"}]}],"alarm":bool}
+#                 main.qml stdout'u JSON.parse edip providers[]/alarm okur;
+#                 bu ŞEMA birebir korunmak zorundadır (plasmoid sessizce
+#                 bozulur). Kayıt hiç yoksa {"providers":[],"alarm":false}
+#                 basılır — boş stdout main.qml'de "boş çıktı" hatasıdır.
+#   summary       satır satır "id: today=N total=M limits[label pct% (reset)]"
+#                 `cachy-agent usage` bu modu çalıştırır; ready:false kayıtta
+#                 reason varsa "id: veri yok (reason)" basılır.
+#
+# Kaynak: ${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage/*.json
+# Eski main.qml gömülü python'u ~/.local/state hardcoded idi; XDG_STATE_HOME'u
+# onurlandıran diğer beş okuyucudan sessizce sapıyordu (Task 7 defekt-1).
+#
+# Eşik ve normalizasyonlar usage-oneline ile aynıdır:
+#   - percent > 1.0 yüzde verilmiştir -> /100
+#   - alarm: herhangi bir limitin percent'i >= 0.9
+#   - bozuk/okunamayan JSON sessizce atlanır
+# Sözleşme (docs/usage-schema.md): ready:true kayıt TÜM sayaç alanlarını
+# taşır (0 olabilir, hiç olmamazlık edemez); ready:false kayıt yalnızca temel
+# alanları + isteğe bağlı reason taşır.
+set -u
+USAGE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cachy-agent/agents/usage"
+MODE="${1:-}"
+case "$MODE" in
+  ""|summary) ;;
+  *)
+    echo "kullanım: cachy-agent-usage-fetch [summary]" >&2
+    exit 2 ;;
+esac
+python3 - "$USAGE_DIR" "$MODE" <<'PY'
+import glob
+import json
+import math
+import os
+import re
+import sys
+from datetime import datetime
+
+usage_dir = sys.argv[1] if len(sys.argv) > 1 else ""
+mode = sys.argv[2] if len(sys.argv) > 2 else ""
+MONTHS_TR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz",
+             "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"]
+
+
+def short_reset(s):
+    # usage-oneline ile aynı: "2026-10-07T12:00:00Z" -> "7 Eki"
+    if not s:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        return f"{dt.day} {MONTHS_TR[dt.month - 1]}"
+    except Exception:
+        pass
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(s))
+    if m:
+        try:
+            mo, d = int(m.group(2)), int(m.group(3))
+            if 1 <= mo <= 12:
+                return f"{d} {MONTHS_TR[mo - 1]}"
+        except Exception:
+            pass
+    return ""
+
+
+def pct_of(p):
+    # usage-oneline/panel/alarm ile aynı normalizasyon
+    try:
+        p = float(p)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(p):
+        # NaN/Infinity: json.loads kabul eder (usage-update'in doğrulayıcısı
+        # da), ama değeri olduğu gibi bırakırsak json.dumps bare NaN token'i
+        # basar ve QML'in KATI JSON.parse'u patlar -> limit atlanır.
+        return None
+    if p > 1.0:  # yüzde verilmişse orana çevir
+        p = p / 100.0
+    return p
+
+
+def counter(d, key):
+    # Sözleşme gereği ready:true kayıtta sayaç hep vardır; yine de bozuk tipte
+    # (None/bool/str) ve sonlu olmayan (NaN/Infinity) değerlerde çökmeden 0'a
+    # düş — okuyucu asla patlamamalı. (int(float('nan')) ValueError atar.)
+    v = d.get(key)
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return 0
+    if not math.isfinite(v):
+        return 0
+    return int(v)
+
+
+def limits_of(d):
+    out = []
+    for lim in (d.get("limits") or []):
+        if not isinstance(lim, dict):
+            continue
+        p = pct_of(lim.get("percent"))
+        if p is None:
+            continue
+        out.append({
+            "label": str(lim.get("label") or ""),
+            "percent": p,
+            "resetsAt": str(lim.get("resetsAt") or ""),
+        })
+    return out
+
+
+try:
+    files = sorted(glob.glob(os.path.join(usage_dir, "*.json")))
+except Exception:
+    files = []
+
+records = []  # (id, kayıt) — sıra dosya adına göre kararlı
+for fp in files:
+    try:
+        with open(fp, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        continue  # bozuk dosyayı atla
+    if not isinstance(d, dict):
+        continue
+    aid = str(d.get("id") or os.path.splitext(os.path.basename(fp))[0])
+    records.append((aid, d))
+
+if mode != "summary":
+    providers = []
+    for aid, d in records:
+        providers.append({
+            "id": aid,
+            "name": str(d.get("name") or aid),
+            "today": counter(d, "todayPrompts"),
+            "total": counter(d, "totalPrompts"),
+            "limits": limits_of(d),
+        })
+    alarm = any(l["percent"] >= 0.9 for pr in providers for l in pr["limits"])
+    # ayraçsız (compact): main.qml'in JSON.parse'u boşluğa kayıtsız, ama
+    # docs/usage-schema.md'deki örnek gövde birebir bu biçimde
+    print(json.dumps({"providers": providers, "alarm": alarm},
+                     separators=(",", ":")))
+else:
+    lines = []
+    for aid, d in records:
+        if not d.get("ready", True):
+            reason = str(d.get("reason") or "").strip()
+            lines.append(f"{aid}: veri yok" + (f" ({reason})" if reason else ""))
+            continue
+        shown = []
+        for lim in limits_of(d):
+            pct = int(round(lim["percent"] * 100))
+            rs = short_reset(lim["resetsAt"])
+            lbl = lim["label"].strip()
+            if rs:
+                shown.append(f"{lbl} {pct}% ({rs})" if lbl else f"{pct}% ({rs})")
+            else:
+                shown.append(f"{lbl} {pct}%" if lbl else f"{pct}%")
+        body = ",".join(shown) if shown else "-"
+        lines.append(f"{aid}: today={counter(d, 'todayPrompts')} "
+                     f"total={counter(d, 'totalPrompts')} limits[{body}]")
+    print("\n".join(lines) if lines
+          else "kayıt yok, `cachy-agent-usage-update` çalıştır")
+PY

@@ -4,7 +4,11 @@
 set -u
 
 fail() {
-  printf '{"schemaVersion":1,"id":"opencode","ready":false,"limits":[]}\n'
+  # §6.4/docs/usage-schema.md sözleşmesi: ready:false kayıt da TÜM alanları
+  # taşır (sayaçlar 0, hiçbir alan eksik olmaz). Öncesi yalnızca 4 alan
+  # basıyordu; okuyucular (oneline/panel/fetch) eksik kayıtta farklı
+  # varsayılanlara düşüyordu (Task 7 defekt-2'nin kolektör yüzü).
+  printf '{"schemaVersion":1,"id":"opencode","name":"opencode","updatedAt":"%s","ready":false,"tierLabel":"","limits":[],"todayPrompts":0,"todaySessions":0,"todayTotalTokens":0,"totalPrompts":0,"totalSessions":0}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   exit 0
 }
 
@@ -16,7 +20,7 @@ TODAY_JSON="$(opencode stats --days 0 --json 2>/dev/null)" || fail
 [ -n "$ALL_JSON" ] && [ -n "$TODAY_JSON" ] || fail
 
 export ALL_JSON TODAY_JSON
-python3 - <<'PY' || printf '{"schemaVersion":1,"id":"opencode","ready":false,"limits":[]}\n'
+python3 - <<'PY' || fail
 import json, os, datetime
 
 def tot_tokens(t):

@@ -1,0 +1,160 @@
+name: ci
+
+on: [push, pull_request]
+
+# Depo salt-okunur: bu iş akışı hiçbir şey yazmaz, göndermez, silmez.
+permissions:
+  contents: read
+
+# Aynı dal için yeni push gelirse eski koşu iptal edilir (tasarruf + net sonuç).
+# Farklı dallar birbirini beklemez.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04   # ubuntu-latest 2026-10-19 itibarıyla Ubuntu 26ya geçecek;
+    # Takılı bir adım (ör. systemd-analyze'in bir unit'te beklemesi) işi
+    # sonsuza kadar açık tutmasın.
+    timeout-minutes: 10
+
+    # M-2: locale'i ADIM bazında değil İŞ bazında sabitliyoruz, böylece
+    # smoke/test/argv adımları da aynı kodlamada çalışır. Nedeni shellcheck
+    # adımındaki yorumda uzun uzun anlatılıyor.
+    env:
+      LC_ALL: C.UTF-8
+      LANG: C.UTF-8
+
+    steps:
+      - uses: actions/checkout@v5   # v4 Node 20 hedefliyor ve kullanımdan kaldırıldı
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y desktop-file-utils
+          # shellcheck ubuntu-latest apt deposunda 0.9.0; aşağıdaki sürüm
+          # koruması 0.11+ istiyor ve yerelde de tam 0.11.0 ile temiz
+          # geçiyoruz. Resmî STATİK binary kurulur — apt paketi KURULMAZ,
+          # yoksa /usr/bin/shellcheck PATH'te /usr/local/bin'i gölgeler.
+          #
+          # Bu dal İLK KEZ push edildiğinde CI koddan değil kendi ortamından
+          # kırmızı döndü: "shellcheck 0.11+ gerekli, bulunan: 0.9.0". Yani
+          # koruma (I-3) tam yazıldığı gibi çalıştı: sürüm kaymasını sessizce
+          # yutmak yerine gürültü çıkarmayı seçti.
+          sc_ver=0.11.0
+          sc_tmp="$(mktemp -d)"
+          curl -fsSL -o "$sc_tmp/sc.tar.gz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${sc_ver}/shellcheck-v${sc_ver}.linux.x86_64.tar.gz"
+          sudo tar -xzf "$sc_tmp/sc.tar.gz" -C "$sc_tmp"
+          sudo install -m 0755 "$sc_tmp/shellcheck-v${sc_ver}/shellcheck" /usr/local/bin/shellcheck
+          sudo rm -rf "$sc_tmp"   # tar root sahibi yaratti: silmek de sudo ister
+          shellcheck --version | sed -n 's/^version: /kurulan shellcheck: /p'
+
+      - name: shellcheck surumu
+        run: |
+          # I-3: sürüm kayması sessizce kontrolü zayıflatır.
+          # Bu dal İLK push'ta CI'yi kendi ortamı kırmızıya döndürdü:
+          # ubuntu imajının apt deposunda shellcheck 0.9.0 var, koruma 0.11+
+          # istiyor. Artık resmî statik binary kuruluyor (yukarıya bkz).
+          # 0.9.0'da olmayan kontroller (örn. SC2317/SC2329) CI'da hiç
+          # tetiklenmez ama yerelde tetikleniyor gibi görünür — yani sessiz
+          # yanlış güvence. Bu adım sürümü DOĞRULAR ve eskiyse kırmızı döner.
+          sc_ver="$(shellcheck --version | sed -n 's/^version: //p')"
+          echo "shellcheck surumu: ${sc_ver:-bilinmiyor}"
+          if ! printf '%s' "$sc_ver" | grep -Eq '^0\.1[1-9]\.'; then
+            echo "::error::shellcheck 0.11+ gerekli, bulunan: ${sc_ver:-bilinmiyor}"
+            echo "0.9.0 sonrasi eklenen kontroller (orn. SC2317/SC2329) sessizce atlanir."
+            exit 1
+          fi
+
+      - name: shellcheck
+        run: |
+          # Dosya listesi AÇIK — `src/bin/*` glob'u KULLANILMAZ.
+          #
+          # Glob iki python3 shebang'li dosyayı da toplar:
+          #   src/bin/cachy-notify-action.py
+          #   src/bin/cachy-agent-usage-panel
+          # shellcheck bunlara SC1071 "Sorry!" hatası verir; bu bizim
+          # kodumuzun kusuru değil, sadece yanlış girdi. Açık liste aynı
+          # zamanda yanlışlıkla yeni dosya eklemeyi de engeller.
+          #
+          # LC_ALL/LANG C.UTF-8 NEDEN SABİTLENİYOR (ölçülmüş davranış):
+          # shellcheck bulgu satırlarını locale'in kodlamasıyla yazar. ASCII
+          # bir locale'de (LC_ALL=C, ya da sistemde ÜRETİLMEMİŞ bir tr_TR.UTF-8)
+          # Türkçe karakter içeren bir bulgu satırı yazılırken şu hata çıkar:
+          #   commitBuffer: invalid argument (cannot encode character '\305')
+          # ve iki şekilde bozulur:
+          #   * boru YOKSA exit 2 (kırmızı) — ama çıktı kırıktır, hangi
+          #     dosyanın hangi hatayı verdiği okunamaz. Kırmızı yanlış yön
+          #     gösterir: "bir şey bozuk" sanılır, oysa bozulan sadece çıktıdır.
+          #   * çıktı BORUYSA exit 0 (SESSİZ GEÇME) — hiçbir bulgu gösterilmez.
+          # Yani asıl tehlike sessiz yeşildir; o yüzden (a) locale'i sabitliyor
+          # ve (b) bu adımda KESİNLİKLE boru kullanmıyoruz.  Boru kullanılsaydı
+          # kabuk yalnızca son komutun (grep/tee) durumunu görürdü ve shellcheck
+          # 2 döndürse bile adım yeşil kalırdı.
+          # Ek olarak `bash -e` (GitHub'ın varsayılanı) son komutun durumunu
+          # doğrudan adım durumuna taşır.
+          #
+          # tests/test.sh ve tests/argv-differential.sh DENETLENİR —
+          # Task 5/6'da tescilli taban çizgisiydi (SC2012, SC1087, 4×SC2016);
+          # hepsi düzeltildi, ikisi de temiz. Yeni bulgu çıkarsa CI yakalar.
+          # src/bin/* glob'u KULLANILMAZ: python3 shebang'li iki dosya
+          # (cachy-notify-action.py, cachy-agent-usage-panel) SC1071 verir.
+          # Ek olarak `bash -e` (GitHub'ın varsayılanı) son komutun durumunu
+          # doğrudan adım durumuna taşır.
+          shellcheck -x src/bin/cachy-agent src/bin/cachy-agent-agents \
+                       src/bin/cachy-agent-crash src/bin/cachy-agent-install \
+                       src/bin/cachy-agent-menu src/bin/cachy-agent-open \
+                       src/bin/cachy-agent-usage-alarm src/bin/cachy-agent-usage-codex \
+                       src/bin/cachy-agent-usage-copilot src/bin/cachy-agent-usage-fetch \
+                       src/bin/cachy-agent-usage-oneline \
+                       src/bin/cachy-agent-usage-opencode src/bin/cachy-agent-usage-update \
+                       src/bin/cachy-crash-watch \
+                       install.sh uninstall.sh tests/smoke.sh \
+                       tests/test.sh tests/argv-differential.sh
+
+      - name: smoke
+        run: ./tests/smoke.sh
+
+      # tr_TR.UTF-8 ÜRETİLİR (seçilmez).
+      #
+      # Neden: test 16/16b/16c/16d `locale -a | grep tr_TR` ile koşullu —
+      # ubuntu-latest'te tr_TR.UTF-8 ÜRETİLMEDİĞİ için bu dört test CI'da
+      # sessizce SKIP oluyordu. Dalın TAMAMEN sebebi olan düzeltme
+      # (config parser'da collation sabitleme, e009399) böylece CI'da hiç
+      # ölçülmüyordu: regresyon koruması devre dışıydı.
+      #
+      # Üretmek yeterli — LANG/LC_ALL yine C.UTF-8'de kalıyor (shellcheck
+      # çıktısının bozulmaması için yukarıdaki gerekçe geçerli). Testler
+      # kendi ortamını kendi ayarlıyor.
+      - name: tr_TR.UTF-8 uret (locale testleri icin)
+        run: |
+          sudo locale-gen tr_TR.UTF-8
+          locale -a | grep -qi '^tr_TR\.utf-\?8$' \
+            || { echo "tr_TR.UTF-8 uretilemedi"; exit 1; }
+
+      - name: test
+        run: ./tests/test.sh
+
+      - name: argv differential
+        run: ./tests/argv-differential.sh --check
+
+      - name: testler repoya yazmamali
+        run: |
+          # I-1: Bu görevin asıl regresyon koruması budur. smoke.sh artık
+          # repo'ya yazmıyor; ama YENİDEN `python3 -m py_compile` gibi bir
+          # satır girerse kimse fark etmez.
+          #
+          # Düz `git status --porcelain` İŞE YARAMAZ: .gitignore zaten
+          # __pycache__/ ve *.pyc'yi yok sayıyor, yani tam olarak bu görevde
+          # silinen artifact'ler görünmez. --ignored=matching olmadan kontrol
+          # sessiz yeşil kalır — yani korumanın kendisi sahte güvence olur.
+          # --ignored=matching, yok sayılan dosyaları "!!" ile listeler.
+          out="$(git status --porcelain --ignored=matching -- .)"
+          if [ -n "$out" ]; then
+            echo "::error::suite repoya dosya yazdi:"
+            echo "$out"
+            exit 1
+          fi
+          echo "temiz: suite repoya yazmadi"

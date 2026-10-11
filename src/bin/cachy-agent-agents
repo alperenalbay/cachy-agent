@@ -1,0 +1,388 @@
+#!/usr/bin/env bash
+# cachy-agent-agents — agent kataloğunun (agents.conf) tek okuyucusu.
+#
+# Diğer tüm script'ler agent listesini BURADAN alır; hiçbiri agent adını
+# hardcode etmez. Sözleşme (spec §5.2):
+#   * stdout yalnızca sorunun cevabı, tanı mesajları stderr'e
+#   * config eksik/bozukken HER sorgu exit 1 + stderr (sessiz boş liste yok)
+#   * çıkış kodları: 0 tamam, 1 bilinmeyen id / config eksik-bozuk / check
+#     başarısız, 2 kullanım hatası
+#
+# -e KULLANILMAZ: sorgular kasıtlı olarak exit 1 döner, tüketiciler
+# `|| true` / `if !` kalıbı kullanır; -e bu akışları bozar.
+set -uo pipefail
+
+# SÖZLEŞME: config bir PARSER'dır ve bir parser'ın eşleşmeleri
+# ORTAK DİLİM (collation) BAĞIMSIZ olmalıdır.
+#
+# `[[ "$id" =~ ^[A-Za-z0-9_-]+$ ]]` bash'in POSIX karakter ARAKLIKLARINI
+# collation ile yorumlar. tr_TR.UTF-8 altında `i` ve `ı` ayrı harflerdir;
+# `[A-Za-z]` içinde `I` vardır ama `i` YOKTUR. Sonuc: id `copilot` REDDEDILIR
+# (i içermiyor) — kullanıcının kendi gecerli config'i reddedilir.
+#
+# Bu satır olmadan her test subagent'i C locale altinda calistigi icin
+# gorunmez kalirdi. LC_COLLATE=C her esleme deterministik kilar.
+#
+# DIKKAT: `[[:alnum:]]` veya araligi yeniden siralamak COZUM DEGIL — tr
+# collation altinda `ı`/`İ` de kabul edilir. C collation dogru semantik.
+#
+# `LC_ALL` once `LC_COLLATE`'yi EZER. Yalniz `export LC_COLLATE=C` yazmak,
+# cagirinin `LC_ALL=tr_TR.UTF-8` dedigi durumda (regresyon testi tam olarak
+# boyle birakilir) HIC BIR SEY yapmaz. Olcum:
+#   LC_ALL=tr_TR.UTF-8 bash -c 'LC_COLLATE=C; [[ copilot =~ ^[A-Za-z0-9_-]+$ ]]'
+#     -> basarisiz (LC_ALL ortusur)
+# Bu yuzden once LC_ALL kaldirilir; boylece LC_COLLATE gercekten gecerli olur
+# ve LC_CTYPE (LANG'den) dokunulmaz — sadece SIRALAMA sabitlenir.
+unset LC_ALL
+export LC_COLLATE=C
+
+PROG="cachy-agent-agents"
+CONF="${CACHY_AGENT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cachy-agent/agents.conf}"
+
+# Katalog dizileri (config sırası korunur) + satır numaraları
+A_ID=(); A_NAME=(); A_INSTALL=(); A_FLAGS=(); A_PF=(); A_LOGIN=()
+A_NFIELD=(); A_LINE=()
+# Yazarın alanı boş bırakıp bırakmadığı (Ruling 8): parse'de '-' sayılır,
+# `check` ise yazım hatasını bildirir.
+A_EMPTY_INSTALL=(); A_EMPTY_LOGIN=()
+FLD=()   # split_fields'in geçici sonucu
+WORKDIR=""; WORKDIR_LINE=0; WORKDIR_COUNT=0
+
+die()  { printf '%s: %s\n' "$PROG" "$1" >&2; exit 1; }
+perr() { printf '%s: %s:%s: %s\n' "$PROG" "$CONF" "$1" "$2" >&2; }
+usage() {
+  printf 'kullanım: %s list|pairs|ids|get <id> <name|install|flags|prompt_flag|login>|flags <id>|known <id>|installed|external|workdir|json|check\n' "$PROG" >&2
+  exit 2
+}
+unknown_id() { printf '%s: bilinmeyen agent: %s\n' "$PROG" "$1" >&2; exit 1; }
+
+# ~ yalnızca WORKDIR alanında genişletilir (spec §5.1)
+expand_tilde() {
+  local v="$1" tilde='~'      # tilde bir ÖNEK olarak karşılaştırılır, genişletilmez
+  if [[ "$v" == "$tilde" ]]; then
+    printf '%s' "$HOME"
+  elif [[ "${v:0:2}" == "$tilde/" ]]; then
+    printf '%s' "$HOME/${v:2}"
+  else
+    printf '%s' "$v"
+  fi
+}
+
+# Kaçışsız '|' alan ayracıdır; "\|" kaçışı geri çözülür (spec §5.1).
+# Diğer backslash'ler olduğu gibi kalır.
+split_fields() {
+  local line="$1" cur="" i ch nxt
+  FLD=()
+  for (( i=0; i<${#line}; i++ )); do
+    ch="${line:i:1}"
+    if [[ "$ch" == "\\" ]]; then
+      nxt="${line:i+1:1}"
+      if [[ "$nxt" == "|" ]]; then cur+="|"; ((i++)); continue; fi
+      cur+="\\"
+    elif [[ "$ch" == "|" ]]; then
+      FLD+=("$cur"); cur=""
+    else
+      cur+="$ch"
+    fi
+  done
+  FLD+=("$cur")
+}
+
+# parse_config idempotent olmalı: her çağrıda durum sıfırlanır.
+reset_state() {
+  A_ID=(); A_NAME=(); A_INSTALL=(); A_FLAGS=(); A_PF=(); A_LOGIN=()
+  A_NFIELD=(); A_LINE=(); A_EMPTY_INSTALL=(); A_EMPTY_LOGIN=()
+  WORKDIR=""; WORKDIR_LINE=0; WORKDIR_COUNT=0
+}
+
+parse_config() {
+  local lineno=0 line key rest
+
+  reset_state
+
+  if [[ ! -f "$CONF" ]]; then
+    die "config dosyası yok: $CONF (install.sh çalıştırıp yeniden deneyin)"
+  fi
+  if [[ ! -r "$CONF" ]]; then
+    die "config dosyası okunamıyor: $CONF"
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    lineno=$((lineno+1))
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"   # sol boşluk
+    line="${line%"${line##*[![:space:]]}"}"   # sağ boşluk
+    [[ -z "$line" ]] && continue
+    [[ "$line" == "#"* ]] && continue
+
+    if [[ "$line" != *"="* ]]; then
+      perr "$lineno" "satır '=' içermiyor, beklenen: id=görünen_ad|install|flags|prompt_flag|login"
+      exit 1
+    fi
+    key="${line%%=*}"; rest="${line#*=}"
+
+    if [[ "$key" == "WORKDIR" ]]; then
+      (( WORKDIR_COUNT++ ))
+      WORKDIR_LINE="$lineno"
+      WORKDIR="$rest"
+      continue
+    fi
+
+    split_fields "$rest"
+    # id '=' ile ayrıldığı için boru ile bölünen alan sayısı 5'tir
+    # (toplam 6 alan: id + 5). Fazlası ileri uyum için yok sayılır,
+    # ama `check` tam olarak 6 alan şartı koyar (spec §5.1 / §5.5).
+    if (( ${#FLD[@]} < 5 )); then
+      perr "$lineno" "agent satırı 6 alan istiyor (id + 5), $(( ${#FLD[@]} + 1 )) alan bulundu (id=görünen_ad|install|flags|prompt_flag|login)"
+      exit 1
+    fi
+
+    # Ruling 8: boş install/login okuma yolunda '-' sayılır (spec §5.1),
+    # böylece `external` yanlış pozitif vermez, kurulum script'i boş komut
+    # çalıştırmaz. Yazım hatasını `check` bildirir.
+    inst="${FLD[1]}"; empty_inst=0
+    if [[ -z "$inst" ]]; then inst="-"; empty_inst=1; fi
+    login="${FLD[4]}"; empty_login=0
+    if [[ -z "$login" ]]; then login="-"; empty_login=1; fi
+
+    A_ID+=("$key");            A_NAME+=("${FLD[0]}")
+    A_INSTALL+=("$inst");      A_FLAGS+=("${FLD[2]}")
+    A_PF+=("${FLD[3]}");       A_LOGIN+=("$login")
+    A_NFIELD+=("${#FLD[@]}"); A_LINE+=("$lineno")
+    A_EMPTY_INSTALL+=("$empty_inst"); A_EMPTY_LOGIN+=("$empty_login")
+  done < "$CONF"
+
+  return 0
+}
+
+# check — spec §5.5 maddeleri, satır numarasıyla. Hata varsa exit 1.
+check_config() {
+  local n=${#A_ID[@]} i bad=0 id name
+  declare -A SEEN=()
+
+  # 0. katalog bos olamaz. Bos (veya yalnizca yorum/ WORKDIR iceren) config
+  # daha once GECERLI sayiliyordu; boyle bir config ile `list` bos doner,
+  # menude hic agent gorunmez ve HICBIR hata ciktisi olmaz. Yanlislikla
+  # kirpilan config'i sessizce kabul etmek, katalogun tek dogrulama
+  # noktasinin islevini bosaltir.
+  if (( n == 0 )); then
+    perr 1 "en az bir agent satırı olmalı (config boş veya yalnızca yorum/WORKDIR içeriyor)"
+    bad=1
+  fi
+
+  for (( i=0; i<n; i++ )); do
+    local ln="${A_LINE[i]}" nf="${A_NFIELD[i]}"
+    id="${A_ID[i]}"; name="${A_NAME[i]}"
+
+    # 1. tam olarak 6 alan (id + 5)
+    if (( nf != 5 )); then
+      perr "$ln" "tam olarak 6 alan olmalı (id + 5), $(( nf + 1 )) alan bulundu (kaçışsız '|' bölme hatası olabilir)"
+      bad=1
+    fi
+    # 2. id benzersiz ve [A-Za-z0-9_-]+
+    if [[ ! "$id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+      perr "$ln" "geçersiz id '$id' (yalnızca [A-Za-z0-9_-] kabul edilir)"
+      bad=1
+    elif [[ -n "${SEEN[$id]:-}" ]]; then
+      perr "$ln" "yinelenen id '$id' (ilk görülme: ${SEEN[$id]}. satır)"
+      bad=1
+    else
+      SEEN["$id"]="$ln"
+    fi
+    # 3. tırnak yok (flags/prompt_flag), flags'ta '|' yok
+    if [[ "${A_FLAGS[i]}" == *'"'* || "${A_FLAGS[i]}" == *"'"* ]]; then
+      perr "$ln" "flags içinde tırnak olamaz: '${A_FLAGS[i]}'"; bad=1
+    fi
+    if [[ "${A_PF[i]}" == *'"'* || "${A_PF[i]}" == *"'"* ]]; then
+      perr "$ln" "prompt_flag içinde tırnak olamaz: '${A_PF[i]}'"; bad=1
+    fi
+    if [[ "${A_FLAGS[i]}" == *"|"* ]]; then
+      perr "$ln" "flags içinde '|' olamaz (ayraçtır)"; bad=1
+    fi
+    # 4. prompt_flag: '-' ya da '-' ile başlayan TEK bayrak
+    if [[ "${A_PF[i]}" != "-" && ! "${A_PF[i]}" =~ ^-[A-Za-z0-9_-]+$ ]]; then
+      perr "$ln" "geçersiz prompt_flag '${A_PF[i]}' ('-' ya da '-' ile başlayan tek bayrak olmalı)"
+      bad=1
+    fi
+    # 5. install / login: ya dolu ya da '-'; yazarın boş bıraktığı
+    #    ayrıca yazım hatası olarak bildirilir (Ruling 8).
+    if [[ "${A_EMPTY_INSTALL[i]}" == 1 ]]; then
+      perr "$ln" "install boş bırakılmış; okuma yolunda '-' sayıldı ama '-' yazman gerekir"; bad=1
+    fi
+    if [[ "${A_EMPTY_LOGIN[i]}" == 1 ]]; then
+      perr "$ln" "login boş bırakılmış; okuma yolunda '-' sayıldı ama '-' yazman gerekir"; bad=1
+    fi
+    # json çıktısı için görünen_ad kaçışsız ve kontrol karakteri içermemeli
+    # shellcheck disable=SC1003  # mesajda tek tırnaklı 'literal' gösteriliyor
+    if [[ "$name" == *'"'* || "$name" == *'\'* ]]; then
+      perr "$ln" "görünen_ad içinde '\"' veya '\\' olamaz (json çıktısı bozulur)"; bad=1
+    fi
+    if [[ "$name" == *[[:cntrl:]]* ]]; then
+      perr "$ln" "görünen_ad içinde kontrol karakteri (TAB/CR gibi) olamaz (json çıktısı bozulur)"; bad=1
+    fi
+    # §5.4.1: agy'nin izin bayrakları varsa prompt bayrağı --prompt olmalı
+    if [[ "$id" == "agy" && -n "${A_FLAGS[i]}" && "${A_PF[i]}" != "--prompt" ]]; then
+      perr "$ln" "agy satırında flags doluyken prompt_flag '--prompt' olmalı"; bad=1
+    fi
+    # §5.4.1: cachy-agent run_agent, promptsuz agy çağrısında flags'ın YALNIZ
+    # İLK kelimesini geçirir (`${flags%% *}`) — ölçülen davranış, effort bayrağı
+    # interaktif oturumda düşer. Bu kural olmadan bayrakları yeniden sıralayan
+    # bir kullanıcı ajanı sessizce kırpılmış/geçersiz bir bayrakla çağırır
+    # (ör. `agy --effort`). Kullanıcı config'i kendi düzenlediği için sıra
+    # burada zorlanır.
+    if [[ "$id" == "agy" && -n "${A_FLAGS[i]}" && "${A_FLAGS[i]}" != --dangerously-skip-permissions* ]]; then
+      perr "$ln" "agy satırında flags '--dangerously-skip-permissions' ile BAŞLAMALI (run_agent promptsuz çağrıda flags'ın ilk kelimesini geçirir; sıra bozulursa ajan kırpılmış bayrakla çağrılır): '${A_FLAGS[i]}'"; bad=1
+    fi
+  done
+
+  # 6. WORKDIR: en çok 1 tane, tek alan (alan ayracı '|', kaçışsız '|' hata)
+  if (( WORKDIR_COUNT > 1 )); then
+    perr "$WORKDIR_LINE" "birden fazla WORKDIR satırı ($WORKDIR_COUNT); tam olarak bir tane olmalı"
+    bad=1
+  elif (( WORKDIR_COUNT == 1 )); then
+    if [[ -z "$WORKDIR" ]]; then
+      perr "$WORKDIR_LINE" "WORKDIR boş; yol yaz ya da satırı kaldır"
+      bad=1
+    elif [[ "$WORKDIR" == *"|"* ]]; then
+      perr "$WORKDIR_LINE" "WORKDIR tek alandır; içinde '|' olamaz (WORKDIR=$WORKDIR)"
+      bad=1
+    fi
+  fi
+
+  (( bad == 0 )) || exit 1
+  return 0
+}
+
+idx_of() {
+  local want="$1" i
+  for (( i=0; i<${#A_ID[@]}; i++ )); do
+    if [[ "${A_ID[i]}" == "$want" ]]; then printf '%s' "$i"; return 0; fi
+  done
+  return 1
+}
+
+# get'in kabul ettiği alanlar (spec §5.2). `id` bir alan değildir; id
+# zaten komutun ilk argümanıdır.
+field_index() {
+  case "$1" in
+    name) printf '1' ;; install) printf '2' ;;
+    flags) printf '3' ;; prompt_flag) printf '4' ;; login) printf '5' ;;
+    *) return 1 ;;
+  esac
+}
+
+cmd=${1:-}; [[ $# -gt 0 ]] && shift || true
+
+# Kullanım doğrulaması config PARSE EDİLMEDEN yapılır: yanlış yazılmış bir
+# sorgu "config eksik/bozuk" sanılmamalı, exit 2 dönmeli (spec §5.2).
+# Altı görev bu kodlara göre dallanıyor; 1 ile 2 karışmamalı.
+case "$cmd" in
+  list|pairs|ids|installed|external|workdir|json|check) [[ $# -eq 0 ]] || usage ;;
+  get)                 [[ $# -eq 2 ]] || usage ;;
+  flags|known)         [[ $# -eq 1 ]] || usage ;;
+  "")                  usage ;;
+  *)  printf 'bilinmeyen sorgu: %s\n' "$cmd" >&2; usage ;;
+esac
+
+parse_config
+
+# json_kacis <metin> -> JSON gövdesi (tırnak hariç)
+#
+# Kaçışlanan: \ ve " (JSON zorunlu) + KONTROL KARAKTERLERİ (JSON'da ham
+# olarak yasak). \b \f \n \r \t adıyla, kalanları \u00XX olarak yazılır.
+#
+# Neden: önceki hâli yalnız \ ve " kaçıyordu. name içinde TAB gibi bir kontrol
+# karakteri config'te mümkün (check reddediyor ama kimse check çağırmıyor —
+# install.sh/plasmoid/systemd hiçbir yerde çağırmıyor), bu durumda json çıktısı
+# BOZULUYORDU ve plasmoid `JSON.parse(stdout)` hatası verince agent listesi
+# tamamen kayboluyordu. Kısmi kaçış (sadece \ ve ") tuzağıydı: kontrol
+# karakterleri boşlukta kalıyordu.
+json_kacis() {
+  local s="$1" i c
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"
+  s="${s//$'\b'/\\b}"; s="${s//$'\f'/\\f}"; s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"; s="${s//$'\t'/\\t}"
+  for (( i=1; i<32; i++ )); do
+    c=$(printf '%b' "\\0$(printf '%03o' "$i")")
+    [[ "$c" == $'\b' || "$c" == $'\f' || "$c" == $'\n' || "$c" == $'\r' || "$c" == $'\t' ]] && continue
+    s="${s//"$c"/\\u$(printf '%04x' "$i")}"
+  done
+  printf '%s' "$s"
+}
+
+case "$cmd" in
+  list)
+    for (( i=0; i<${#A_ID[@]}; i++ )); do printf '%s\n' "${A_ID[i]}"; done
+    ;;
+  # pairs: "id<TAB>görünen_ad" — menü id YERİNE görünen adı göstermek için.
+  # Ayrac TAB: config alan ayracı '|', id'lerde TAB bulunmaz. Menü seçimi
+  # yine ID'ye geri çevirir; çalıştırma/kurulum komutları id ile çağrılır.
+  pairs)
+    for (( i=0; i<${#A_ID[@]}; i++ )); do printf '%s\t%s\n' "${A_ID[i]}" "${A_NAME[i]}"; done
+    ;;
+
+  ids)
+    (( ${#A_ID[@]} > 0 )) || exit 0
+    printf '%s\n' "${A_ID[*]}"
+    ;;
+
+  installed)
+    for (( i=0; i<${#A_ID[@]}; i++ )); do
+      command -v "${A_ID[i]}" >/dev/null 2>&1 && printf '%s\n' "${A_ID[i]}"
+    done
+    ;;
+
+  external)
+    for (( i=0; i<${#A_ID[@]}; i++ )); do
+      [[ "${A_INSTALL[i]}" != "-" ]] && printf '%s\n' "${A_ID[i]}"
+    done
+    ;;
+
+  workdir)
+    if [[ -z "$WORKDIR" ]]; then printf '%s\n' "$HOME/Projeler"
+    else expand_tilde "$WORKDIR"; printf '\n'; fi
+    ;;
+
+  json)
+    printf '{"catalog":['
+    for (( i=0; i<${#A_ID[@]}; i++ )); do
+      (( i > 0 )) && printf ','
+      inst=false; command -v "${A_ID[i]}" >/dev/null 2>&1 && inst=true
+      ext=false; [[ "${A_INSTALL[i]}" != "-" ]] && ext=true
+      # id ve name JSON gövdesine güvenle gömülür (bkz. json_kacis)
+      printf '{"id":"%s","name":"%s","installed":%s,"external":%s}' \
+        "$(json_kacis "${A_ID[i]}")" "$(json_kacis "${A_NAME[i]}")" "$inst" "$ext"
+    done
+    printf ']}\n'
+    ;;
+
+  check)
+    check_config
+    ;;
+
+  get)
+    i=$(idx_of "$1") || unknown_id "$1"
+    f=$(field_index "$2") || { printf 'geçersiz alan: %s\n' "$2" >&2; usage; }
+    case "$f" in
+      1) printf '%s\n' "${A_NAME[i]}" ;;    2) printf '%s\n' "${A_INSTALL[i]}" ;;
+      3) printf '%s\n' "${A_FLAGS[i]}" ;;   4) printf '%s\n' "${A_PF[i]}" ;;
+      5) printf '%s\n' "${A_LOGIN[i]}" ;;
+      *) usage ;;
+    esac
+    ;;
+
+  flags)
+    i=$(idx_of "$1") || unknown_id "$1"
+    printf '%s\n' "${A_FLAGS[i]}"
+    ;;
+
+  known)
+    idx_of "$1" >/dev/null || unknown_id "$1"
+    exit 0
+    ;;
+esac
+
+# Bütün dallar buraya düşer. Üretici döngülerin son durumu (ör. son id
+# PATH'te yoksa `command -v`'in 1'i) yanlışlıkla betiğin çıkış kodunu
+# bozmasın diye sabitlenir: hatalar yukarıda `exit` ile çıkıldı.
+exit 0

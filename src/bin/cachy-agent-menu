@@ -1,44 +1,172 @@
 #!/usr/bin/env bash
 # cachy-agent-menu - fuzzel picker -> alacritty agent terminal
 # fuzzel yoksa eski metin prompt'a düşer (kısayol hep çalışır)
+# Agent listesi TEK kaynaktan gelir: cachy-agent-agents list (agents.conf).
+# Burada hiçbir agent adı sabit yazılı değildir.
+#
+# BU SCRIPT KABUKTAN DEĞİL desktop entry'den (bkz. cachy-agent.desktop
+# Exec=__HOME__/.local/bin/cachy-agent-menu) çalışır; KDE'nin başlattığı
+# süreçte PATH'in `~/.local/bin` içerdiği garanti DEĞİLDİR. Aynı sebeple
+# systemd --user unit'inin PATH'i login shell'inkinden farklıdır. Bu yüzden
+# kardeş binary'ler BARE adla değil, mutlak $BIN yoluyla çağrılır (Ruling 10).
+#
+# `CACHY_AGENT_BIN_DIR` SÖZLEŞMESİ: tek değişken dört çağıranın da binary
+# dizinidir (bu script, cachy-agent-open, cachy-agent-install,
+# cachy-agent-usage-update). Kurulumda doğal olarak `~/.local/bin`.
+# Bu değişkeni başka bir yere yazan herkes o dizinde `cachy-agent`,
+# `cachy-agent-agents` VE `cachy-agent-usage-*` koleksiyonlarının hepsinin
+# bulunmasını sağlamak zorundadır — eksik bir dosya hata vermek yerine
+# sessizce atlanır. Tek değişken bilinçlidir; ikinci bir değişken yoktur.
 set -euo pipefail
-AGENT_BIN="$HOME/.local/bin/cachy-agent"
+BIN="${CACHY_AGENT_BIN_DIR:-$HOME/.local/bin}"
+AGENT_BIN="$BIN/cachy-agent"
+AGENTS_BIN="$BIN/cachy-agent-agents"
+
+# Config preflightı fuzzel dalının DIŞINDA: fuzzel kurulu değilken de bozuk
+# config boş bir picker yerine sebebi göstermeli. (v0.1.0'de liste sabitti,
+# bu yol imkânsızdı.)
+#
+# Liste TEK kez okunur — iki ayrı `list` çağrısı config bozukken aynı hatayı
+# stderr'a İKİ kez basardı. Sorgunun exit kodu `list`'in kendisindendir.
+# `set -e` altında düz `ajanlar="$(...)"` başarısızlıkta kabuğu ÖLDÜRÜRDÜ ve
+# `liste_rc` hiç okunamazdı; `&& ... || ...` zinciri hem atlamayı hem kodu
+# güvenle almayı sağlar (&&/|| listesinde `set -e` tetiklenmez).
+# `pairs` = "id<TAB>görünen_ad". Menü GÖRÜNEN ADI gösterir (kullanıcı isteği:
+# "opencode" yerine "OpenChamber" yazsın); seçim yine ID'ye geri çevrilir,
+# çünkü çalıştırma (`cachy-agent-open`), kurulum (`cachy-agent-install`) ve
+# varsayılan yazma komutları id ile çağrılır. Önceki `list` yalnız id döndürüyordu.
+ajanlar="$("$AGENTS_BIN" pairs)" && liste_rc=0 || liste_rc=$?
+if [[ $liste_rc -ne 0 ]]; then
+  # Config yolu bilerek YAZILMAZ: `cachy-agent-agents` tanı mesajında çözülmüş
+  # yolu zaten basıyor (XDG_CONFIG_HOME dahil). Burada yeniden türetmek
+  # XDG_CONFIG_HOME'i düşürür ve BAŞKA bir dosyayı adı gösterebilirdi.
+  # Yalnızca ne yapılması gerektiğini söylüyoruz.
+  echo "cachy-agent-menu: agent listesi alınamadı, cachy-agent --help'e bak" >&2
+  exit 1
+fi
+
 if command -v fuzzel >/dev/null 2>&1; then
-  installed=()
-  missing=()
-  for a in opencode agy claude codex crush copilot cursor-agent grok; do
-    if command -v "$a" >/dev/null 2>&1; then installed+=("$a"); else missing+=("$a"); fi
-  done
+  installed=()   # id'ler
+  gorunen=()    # id ile aynı sırada görünen adlar
+  eksik=()
+  eksik_ad=()
+  while IFS=$'\t' read -r a ad; do
+    [[ -n "$a" ]] || continue
+    ad="${ad:-$a}"   # görünen ad boşsa id'ye düş (config yazım hatası savunması)
+    if command -v "$a" >/dev/null 2>&1; then installed+=("$a"); gorunen+=("$ad")
+    else eksik+=("$a"); eksik_ad+=("$ad"); fi
+  done <<< "$ajanlar"
+  missing=("${eksik[@]+"${eksik[@]}"}")   # aşağıdaki boş-dizi güvenliği için
+  # Görünen ad -> id. İki agent aynı adı taşıyorsa İLKİ kazanır; config'te
+  # benzersiz görünen ad şartı `check`'te yok, yani bu bir varsayımdır.
+  id_for() {
+    local n="$1" i
+    for (( i=0; i<${#gorunen[@]}; i++ )); do
+      if [[ "${gorunen[i]}" == "$n" ]]; then printf '%s' "${installed[i]}"; return 0; fi
+    done
+    for (( i=0; i<${#eksik_ad[@]}; i++ )); do
+      if [[ "${eksik_ad[i]}" == "$n" ]]; then printf '%s' "${eksik[i]}"; return 0; fi
+    done
+    return 1
+  }
+  # Config geçerli ama hiç agent satırı yoksa menü boş kalır (v0.1.0'de de
+  # öyleydi: kullanıcı config'ini boşaltırsa menü açılmaz, hata da yoktur).
   [[ ${#installed[@]} -eq 0 && ${#missing[@]} -eq 0 ]] && exit 0
-  list=$(printf '%s\n' "${installed[@]}")
-  if [[ ${#installed[@]} -gt 0 ]]; then
-    list+=$'\n──────────────────'
-    for a in "${installed[@]}"; do list+=$'\n★ '"$a"' (varsayılan yap)'; done
-  fi
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    list+=$'\n──────────────────'
-    for m in "${missing[@]}"; do list+=$'\n+ '"$m"' (kur)'; done
-  fi
-  sel=$(printf '%s\n' "$list" | fuzzel --dmenu --prompt 'Agent: ' 2>/dev/null || true)
-  [[ -z "${sel:-}" ]] && exit 0
-  case "$sel" in
-    ─*) exit 0 ;;
-    "★ "*)
-      name=$(echo "$sel" | sed 's/^★ //; s/ (varsayılan yap)$//')
-      case "$name" in opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ;; *) exit 0 ;; esac
-      "$HOME/.local/bin/cachy-agent" default "$name" >/dev/null
-      if command -v notify-send >/dev/null 2>&1; then notify-send "cachyAgent" "Varsayılan agent: $name"; fi
-      exit 0
-      ;;
-    "+ "*)
-      name=$(echo "$sel" | sed 's/^+ //; s/ (kur)$//')
-      case "$name" in opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ;; *) exit 0 ;; esac
-      exec /usr/bin/alacritty --class CachyAgent -e "$HOME/.local/bin/cachy-agent-install" "$name"
-      ;;
-    opencode|agy|claude|codex|crush|copilot|cursor-agent|grok) ;;
-    *) exit 0 ;;
-  esac
-  exec /usr/bin/alacritty --class CachyAgent -e "$AGENT_BIN-open" "$sel"
+
+  # MEVCUT VARSAYILAN okunur (okuma yolu: `cachy-agent default` argümansız).
+  # Çıktı yoksa/bozuksa boş kalır — o durumda hiçbir satır ✓ almaz, menü yine
+  # düzgün çalışır. Satırlarda iki boşluk hizalama içindir; fuzzel seçimi
+  # BIREBIR döndürdüğü için ayrıştırırken baştaki boşluklar soyulur.
+  mevcut_varsayilan="$("$AGENT_BIN" default 2>/dev/null || true)"
+
+  # Varsayılandan FARKLI kaç kurulu agent var? "Varsayılanı değiştir" satırı
+  # yalnız anlamlıysa görünür — tek aday varsa menüde yer kaplamasın.
+  degisebilir=0
+  for a in ${installed[@]+"${installed[@]}"}; do
+    [[ "$a" == "$mevcut_varsayilan" ]] || degisebilir=1
+  done
+
+  ayrac=$'──────────────────────────────'
+
+  # İki ekran: 1) agent seç (varsayılan ✓ ile işaretli), 2) varsayılanı
+  # değiştir. Önceki hâlde her kurulu agent hem düz hem "★ (varsayılan yap)"
+  # olarak İKİ kez listeleniyordu (5 agent → 9+ satır) ve hangisinin
+  # varsayılan olduğu hiçbir yerde görünmüyordu.
+  ekran=1
+  while :; do
+    if [[ $ekran -eq 1 ]]; then
+      list=""
+      for (( i=0; i<${#installed[@]}; i++ )); do
+        if [[ "${installed[i]}" == "$mevcut_varsayilan" ]]; then
+          list+=$'\n✓ '"${gorunen[i]}"
+        else
+          list+=$'\n  '"${gorunen[i]}"
+        fi
+      done
+      if [[ ${#installed[@]} -gt 0 && $degisebilir -eq 1 ]]; then
+        list+=$'\n'"$ayrac"
+        list+=$'\n⟲ Varsayılanı değiştir'
+      fi
+    else
+      list="$ayrac"
+      for (( i=0; i<${#installed[@]}; i++ )); do
+        if [[ "${installed[i]}" == "$mevcut_varsayilan" ]]; then
+          list+=$'\n✓ '"${gorunen[i]}"' (şu anki)'
+        else
+          list+=$'\n  '"${gorunen[i]}"' (varsayılan yap)'
+        fi
+      done
+    fi
+    if [[ ${#missing[@]} -gt 0 ]]; then
+      list+=$'\n'"$ayrac"
+      for (( i=0; i<${#eksik_ad[@]}; i++ )); do list+=$'\n+ '"${eksik_ad[i]}"' (kur)'; done
+    fi
+
+    sel=$(printf '%s\n' "$list" | fuzzel --dmenu --prompt 'Agent: ' 2>/dev/null || true)
+    # Boş seçim: 2. ekrandaysa 1. ekrana dön, 1. ekrandaysa çık.
+    [[ -z "${sel:-}" ]] && { [[ $ekran -eq 2 ]] && { ekran=1; continue; }; exit 0; }
+
+    case "$sel" in
+      ─*) continue ;;   # ayraç satırı seçilirse aynı ekranda kal
+      "⟲ "*) ekran=2; continue ;;
+      "+ "*)
+        name=$(printf '%s' "$sel" | sed 's/^+ //; s/ (kur)$//')
+        name=$(id_for "$name") || exit 0
+        "$AGENTS_BIN" known "$name" 2>/dev/null || continue
+        exec /usr/bin/alacritty --class CachyAgent -e "$BIN/cachy-agent-install" "$name"
+        ;;
+      "✓ "*|"  "*)
+        # Baştaki işaret/boşluklar ayırt edici değil: isim = satırın sonu.
+        # 2. ekranda satırlarda açıklama soneki vardır, o da soyulur.
+        name="${sel#✓ }"; name="${name#"${name%%[![:space:]]*}"}"
+        name="${name% (varsayılan yap)}"; name="${name% (şu anki)}"
+        name=$(id_for "$name") || exit 0   # listede olmayan ad -> menüden çık
+        # Bilinmeyen id -> sessiz çıkış (savunma). `continue` DEĞİL: fuzzel
+        # yalnızca az önce bizim kurduğumuz listeyi döndürebildiği için bu
+        # dal pratikte erişilemez; döngüye açık `continue` burada yalnızca
+        # testleri sonsuz döngüye sokuyordu, kazançsız bir esneklikti.
+        "$AGENTS_BIN" known "$name" 2>/dev/null || exit 0
+        if [[ $ekran -eq 2 ]]; then
+          # Zaten varsayılan olan seçilirse hiçbir şey değişmez.
+          [[ "$name" == "$mevcut_varsayilan" ]] || {
+            "$AGENT_BIN" default "$name" >/dev/null
+            if command -v notify-send >/dev/null 2>&1; then
+              notify-send "cachyAgent" "Varsayılan agent: $name"
+            fi
+            mevcut_varsayilan="$name"
+          }
+          ekran=1
+          continue
+        fi
+        exec /usr/bin/alacritty --class CachyAgent -e "$AGENT_BIN-open" "$name"
+        ;;
+      *)
+        # Ön prefix'siz düz satır (defansif; fuzzel listeyi birebir döndürür).
+        "$AGENTS_BIN" known "$sel" 2>/dev/null || exit 0
+        exec /usr/bin/alacritty --class CachyAgent -e "$AGENT_BIN-open" "$sel"
+        ;;
+    esac
+  done
 else
   exec /usr/bin/alacritty --class CachyAgent -e "$AGENT_BIN" --pick
 fi

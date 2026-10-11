@@ -572,9 +572,39 @@ jobs:
 ```
 
 `smoke.sh` CI'da `systemd-analyze verify` çalıştırır — ubuntu-latest'te
-`systemd-analyze` mevcut, `systemd-analyze verify` user unit'leri doğrulayabilir.
-Doğrulayamazsa smoke `FAIL` verir; bu durumda CI adımı `systemd-analyze`'ın
-varlığını kontrol edip yoksa atlar.
+`systemd-analyze` **mevcuttur**, dolayısıyla "araç yok → atla" dalı CI'da
+**devreye girmez**. (Daha önce burada yalnızca varlık kontrolü vardı ve bu
+yanlış bir varsayımdı; ölçüm aşağıda.)
+
+`systemd-analyze verify` yalnızca sözdizimini değil, `ExecStart` hedefinin
+**çalıştırılabilir** olduğunu da denetler. Unit'ler `ExecStart=%h/.local/bin/…`
+kullandığı ve `%h` gerçek `$HOME`'a açıldığı için, uygulamanın **kurulu
+olmadığı** bir makinede (yani CI'da) doğru unit bile kırmızı döner:
+
+```
+cachy-crash-watch.service: Command /home/runner/.local/bin/cachy-crash-watch
+  is not executable: No such file or directory
+```
+
+Bu, smoke'un "kurulum yapmaz / hiçbir şey varsaymaz" sözüyle de çelişir:
+`systemd-analyze` uygulamanın kurulu olduğunu varsayıyor.
+
+Çözüm: `smoke.sh`, unit'leri doğrulamadan önce `%h`'yi geçici bir köke
+yönlendirir ve orada çalıştırılabilir **stub** dosyalar üretir
+(`cachy-crash-watch`, `cachy-agent-usage-update`, `cachy-agent-usage-alarm`).
+Böylece `ExecStart`'in varlığı ve yazımı doğrulanır, hedefin varlığı testin
+kendi stub'ıyla sağlanır — CI'da da, geliştiricinin kurulu sisteminde de
+**aynı sonuç** çıkar. Doğrulama **atlanmaz**, korunur.
+
+`systemd-analyze --root=` alternatifi denendi ve **işe yaramadı**: unit'i
+aran kök altında bulamayıp `Unit … not found` ile 1 dönüyor. `%h` yeniden
+yazımı + stub'lar çalışan yoldur.
+
+Ayrıca `systemd-analyze` hiç yoksa kontrol `skip` olur (sayac artar, kırmızı
+olmaz) — eksik araç ne sahte yeşil ne sahte kırmızı üretmemelidir.
+
+Bozuk directive, eksik `ExecStart`, geçersiz timer değeri ve yanlış yazılmış
+`ExecStart` yolu bu yolla **hepsi yakalanır** (ölçüldü).
 
 Not: `smoke.sh:28` `src/` içinde `/home/` arar — bu, `__HOME__` placeholder'ın
 çalıştığını garanti eder. Korunur.
@@ -775,7 +805,7 @@ yanlış vaatlerin düzeltilmesi**.
 | `install.sh --prefix` geriye uyumsuzluk yaratır | Düşük | `--prefix` opsiyonel; verilmediğinde **hiçbir yol değişmez**. Test 13 tam olarak bunu doğrular |
 | 6 script'in `cachy-agent-agents` çağrısı yazması, ama `install.sh` bu yeni dosyayı kurmadan eski kurulumda çalışmaz | Orta | `install.sh` `src/bin/*` glob'uyla kopyalar, yeni dosya otomatik gider. Ama **mevcut kurulum kullanıcıda `install.sh` çalıştırmadan bozulur** — CHANGELOG'a "yeniden kurun" notu düşer |
 | Config bozulursa menü boş görünür | Düşük | §5.2: config eksik/bozukken **her sorgu exit 1** verir ve stderr'e dosya yolu + satır numarası yazar. Tüketiciler bunu yutmaz — kullanıcı hatayı görür. Test 11 her iki durumu da doğrular |
-| CI'da `systemd-analyze verify` davranışı farklı | Düşük | smoke.sh bu komutun yokluğunda atlar (§7.6) |
+| CI'da `systemd-analyze verify` davranışı farklı | Düşük | Komut ubuntu-latest'te **mevcuttur**, ancak `ExecStart` hedefini de denetlediği için kurulmamış makinede kırmızı döner. `smoke.sh` bu yüzden `%h`'yi geçici köke yönlendirip stub dosyalar üretir; doğrulama hem CI'da hem geliştirici makinesinde aynı sonucu verir (§7.6). Araç hiç yoksa kontrol `skip` olur |
 
 ## 11. Tanım — Bitti
 
