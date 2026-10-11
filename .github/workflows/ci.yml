@@ -32,7 +32,24 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck desktop-file-utils
+          sudo apt-get install -y desktop-file-utils
+          # shellcheck ubuntu-latest apt deposunda 0.9.0; aşağıdaki sürüm
+          # koruması 0.11+ istiyor ve yerelde de tam 0.11.0 ile temiz
+          # geçiyoruz. Resmî STATİK binary kurulur — apt paketi KURULMAZ,
+          # yoksa /usr/bin/shellcheck PATH'te /usr/local/bin'i gölgeler.
+          #
+          # Bu dal İLK KEZ push edildiğinde CI koddan değil kendi ortamından
+          # kırmızı döndü: "shellcheck 0.11+ gerekli, bulunan: 0.9.0". Yani
+          # koruma (I-3) tam yazıldığı gibi çalıştı: sürüm kaymasını sessizce
+          # yutmak yerine gürültü çıkarmayı seçti.
+          sc_ver=0.11.0
+          sc_tmp="$(mktemp -d)"
+          curl -fsSL -o "$sc_tmp/sc.tar.gz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${sc_ver}/shellcheck-v${sc_ver}.linux.x86_64.tar.gz"
+          sudo tar -xzf "$sc_tmp/sc.tar.gz" -C "$sc_tmp"
+          sudo install -m 0755 "$sc_tmp/shellcheck-v${sc_ver}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf "$sc_tmp"
+          shellcheck --version | sed -n 's/^version: /kurulan shellcheck: /p'
 
       - name: shellcheck surumu
         run: |
