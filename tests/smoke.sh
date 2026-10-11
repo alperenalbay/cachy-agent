@@ -65,10 +65,12 @@ echo "== gömülü python taraması (src içinde gömülü python3 kalıntısı 
 # Task 7 öncesi iki yerde bütün bir python programı tırnak içine gömülüydü
 # (main.qml fetchCommand ve `cachy-agent usage`); ikisi de gerçek script'lere
 # taşındı. Bu tarama kalıbın geri dönmesini yasaklar. Regex, `python3 -c`
-# kalıbının TIRNAKLI biçimini arar: `python3 - <veri> <<'PY'` heredoc deseni
-# (oneline/panel/fetch'in kullandığı) ve `python3 "$yol"` çağrıları eşleşmez.
-# Tarama src/ ile sınırlı: tests/ içindeki python3 çağrıları meşrudur.
-if grep -rn --exclude-dir=__pycache__ -E "python3 -c ['\"]" "$REPO_DIR/src/" 2>&1; then
+# kalıbının TIRNAKLI biçimini arar ve boşluk toleranssızdır: çift boşluk
+# (`python3  -c`) ve boşluksuz (`python3 -c"…"`) varyantları da yakalanır.
+# `python3 - <veri> <<'PY'` heredoc deseni (oneline/panel/fetch'in kullandığı)
+# ve `python3 "$yol"` çağrıları eşleşmez. Tarama src/ ile sınırlı: tests/
+# içindeki python3 çağrıları meşrudur.
+if grep -rn --exclude-dir=__pycache__ -E "python3[[:space:]]+-c[[:space:]]*['\"]" "$REPO_DIR/src/" 2>&1; then
   bad "src/ içinde gömülü python3 -c kaldı"
 else
   ok "src/ temiz (gömülü python3 yok)"

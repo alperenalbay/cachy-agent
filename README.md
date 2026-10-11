@@ -69,4 +69,5 @@ Removes the menu entries, shortcut, plasmoid, and crash watcher installed by `in
 ## Known Limitations
 
 - Agent quota (e.g. agy quota) is not checked programmatically — monitor usage manually.
+- Usage tracking has a collector for only 3 of the 8 catalog agents (`opencode`, `codex`, `copilot`); the other five (`agy`, `claude`, `crush`, `cursor-agent`, `grok`) are not collected — see `docs/usage-schema.md`.
 - `claude login` is required before Claude-based agents will work; the setup flow verifies this but cannot authenticate for you.

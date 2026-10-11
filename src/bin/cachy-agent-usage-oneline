@@ -2,7 +2,7 @@
 # cachy-agent-usage-oneline - tek satır kompakt kullanım özeti
 # Kaynak: ~/.local/state/cachy-agent/agents/usage/*.json
 # Format (örnek): opencode:74 • codex:0% (18 Eki) • copilot:-
-#   - ready=false ise            -> <id>:-
+#   - ready=false ise            -> <id>:- (varsa reason)
 #   - limiti varsa (ready ise)    -> <id>:<pct>% (<gün> <ay>) [birden fazla limit "/" ile]
 #   - limit yoksa (ready ise)     -> <id>:<todayPrompts>
 #   - JSON yok/bozuk atlanır; hiç kayıt yoksa "kayıt yok" basar.

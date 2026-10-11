@@ -28,11 +28,11 @@ eski main.qml gömülü python'u bu kuralı çiğniyordu).
 | `ready` | bool | `true` | `false` |
 | `tierLabel` | string | zorunlu (boş olabilir) | zorunlu (boş olabilir) |
 | `limits` | dizi | zorunlu (boş olabilir) | zorunlu (boş olabilir) |
-| `todayPrompts` | int | zorunlu (0 olabilir, **asla eksik olamaz**) | yazılmaz |
-| `todaySessions` | int | zorunlu | yazılmaz |
-| `todayTotalTokens` | int | zorunlu | yazılmaz |
-| `totalPrompts` | int | zorunlu | yazılmaz |
-| `totalSessions` | int | zorunlu | yazılmaz |
+| `todayPrompts` | int | zorunlu (0 olabilir, **asla eksik olamaz**) | garanti edilmez (0 varsayılır) |
+| `todaySessions` | int | zorunlu | garanti edilmez (0 varsayılır) |
+| `todayTotalTokens` | int | zorunlu | garanti edilmez (0 varsayılır) |
+| `totalPrompts` | int | zorunlu | garanti edilmez (0 varsayılır) |
+| `totalSessions` | int | zorunlu | garanti edilmez (0 varsayılır) |
 | `reason` | string | yazılmaz | isteğe bağlı |
 
 ### Sözleşmenin iki kuralı
@@ -41,10 +41,15 @@ eski main.qml gömülü python'u bu kuralı çiğniyordu).
    alanın yokluğu olamaz. Okuyucular eksik alanı varsayılanla doldurmak
    zorunda değildir — eski `cachy-agent usage`'nın `today`/`total`
    fallback'leri (Task 7 defekt-2) bu yüzden silindi.
-2. **`ready:false` kayıt yalnızca temel alanları taşır:**
+2. **`ready:false` kayıtta sayaçlar GARANTİ EDİLMEZ.** Temel alanlar
    `{schemaVersion, id, name, updatedAt, ready, limits}` + isteğe bağlı
-   `reason`. Sayaçlar yazılmaz; "toplanamadı" ile "0 kullanıldı" ayrımı
-   `ready` alanının kendisidir.
+   `reason` her zaman vardır; sayaç alanları yazılmış da olabilir
+   yazılmamış da — mevcut kolektörler ikisini de yapar
+   (`cachy-agent-usage-opencode` hata yolunda altı sayacı da 0 yazar,
+   `cachy-agent-usage-copilot` yalnız `todayPrompts`'ı yazar). Okuyucu,
+   yazılmayan her sayacı **0 varsaymak zorundadır**; "toplanamadı" ile
+   "0 kullanıldı" ayrımını `ready` alanının kendisi taşır. Bu, okuyucuların
+   `or 0` ile güvenli varsaymasını mümkün kılar (§6.4'ün gerekçesi).
 
 ### `limits` öğesi
 

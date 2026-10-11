@@ -69,4 +69,5 @@ ga
 ## Bilinen Sınırlar
 
 - Agent kotası (örn. agy kotası) programatik olarak denetlenmez — kullanımı el ile izle.
+- Kullanım izleme 8 katalog agent'ından yalnız 3'ü için kolektör içerir (`opencode`, `codex`, `copilot`); diğer beşi (`agy`, `claude`, `crush`, `cursor-agent`, `grok`) izlenmez — bkz. `docs/usage-schema.md`.
 - Claude tabanlı agent'lar için `claude login` gerekir; kurulum akışı bunu doğrular ama senin yerine giriş yapamaz.

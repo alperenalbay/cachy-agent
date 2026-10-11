@@ -951,6 +951,31 @@ if [[ $rc -eq 0 && "$outf" == '{"providers":[],"alarm":false}' ]]; then
 else
   bad "18f bos kayitta providers JSON" "rc=$rc out='$outf'"
 fi
+# 18g. NaN/Infinity sayaç ve percent: çökme YOK, çıktı KATI JSON (fix-round I-2)
+#
+# Ulaşılabilir yol: usage-update'in doğrulayıcısı json.loads'tur ve NaN/
+# Infinity token'larını KABUL eder — yani böyle bir kayıt state'e yazılabilir.
+# fetch iki şeyi aynı anda yapmalı: çökmemeli (ValueError: cannot convert
+# float NaN to integer) ve bare NaN/Infinity token BASMAMALI (QML'in
+# JSON.parse'u katıdır; bare token -> "parse hatası").
+# Bare token'lar json.dumps ile ÜRETİLEMEZ; fixture elle yazılır.
+NANFX="$SCRATCH_ROOT/fetch-nan-state"
+mkdir -p "$NANFX/cachy-agent/agents/usage"
+printf '%s\n' '{"schemaVersion":1,"id":"nanagent","name":"Nan","updatedAt":"2026-10-06T00:00:00Z","ready":true,"tierLabel":"","limits":[{"label":"5h","percent":NaN,"resetsAt":null}],"todayPrompts":NaN,"todaySessions":0,"todayTotalTokens":0,"totalPrompts":Infinity,"totalSessions":0}' > "$NANFX/cachy-agent/agents/usage/nanagent.json"
+n_out=$(XDG_STATE_HOME="$NANFX" HOME="$FXHOME" cachy-agent-usage-fetch 2>/dev/null); rc=$?
+n_ok=$(printf '%s' "$n_out" | python3 -c 'import json,sys
+raw = sys.stdin.read()
+assert "NaN" not in raw and "Infinity" not in raw, "bare token kaldi: " + raw
+d = json.loads(raw, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(c)))
+p = d["providers"][0]
+assert p["today"] == 0 and p["total"] == 0 and p["limits"] == [] and d["alarm"] is False
+print("OK")' 2>&1)
+n_sum=$(XDG_STATE_HOME="$NANFX" HOME="$FXHOME" cachy-agent-usage-fetch summary 2>/dev/null); n_rc=$?
+if [[ $rc -eq 0 && "$n_ok" == "OK" && $n_rc -eq 0 && "$n_sum" == *"nanagent: today=0 total=0 limits[-]"* ]]; then
+  ok "18g NaN/Infinity kayitinda cokme yok, katı JSON basiliyor"
+else
+  bad "18g NaN kayit" "rc=$rc py='$n_ok' sum_rc=$n_rc sum='$(printf '%s' "$n_sum" | tr '\n' '/')'"
+fi
 
 # 16. KRITIK-1 — config parser'ı LOCALE BAĞIMSIZ olmalı.
 #

@@ -34,6 +34,7 @@ esac
 python3 - "$USAGE_DIR" "$MODE" <<'PY'
 import glob
 import json
+import math
 import os
 import re
 import sys
@@ -71,6 +72,11 @@ def pct_of(p):
         p = float(p)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(p):
+        # NaN/Infinity: json.loads kabul eder (usage-update'in doğrulayıcısı
+        # da), ama değeri olduğu gibi bırakırsak json.dumps bare NaN token'i
+        # basar ve QML'in KATI JSON.parse'u patlar -> limit atlanır.
+        return None
     if p > 1.0:  # yüzde verilmişse orana çevir
         p = p / 100.0
     return p
@@ -78,9 +84,12 @@ def pct_of(p):
 
 def counter(d, key):
     # Sözleşme gereği ready:true kayıtta sayaç hep vardır; yine de bozuk tipte
-    # (None/bool/str) çökmeden 0'a düş — okuyucu asla patlamamalı.
+    # (None/bool/str) ve sonlu olmayan (NaN/Infinity) değerlerde çökmeden 0'a
+    # düş — okuyucu asla patlamamalı. (int(float('nan')) ValueError atar.)
     v = d.get(key)
     if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return 0
+    if not math.isfinite(v):
         return 0
     return int(v)
 
