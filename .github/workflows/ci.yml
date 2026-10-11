@@ -78,17 +78,13 @@ jobs:
           # Ek olarak `bash -e` (GitHub'ın varsayılanı) son komutun durumunu
           # doğrudan adım durumuna taşır.
           #
-          # tests/test.sh ve tests/argv-differential.sh BİLEREK DIŞARIDA —
-          # bu KALICI bir karar, "şimdilik uygun" değil. Bulgular TESCİLLİ
-          # taban çizgidir ve ayrı bir takibe (Task 9) yazıldı; o takip
-          # kapanmadan bu ikisi CI'ya ALINMAMALI (aksi halde CI ilk günden
-          # kırmızı olur). Düzeltmeler tek satırlık:
-          #   tests/test.sh:575        SC1087  -> ${l_hata[$a]}
-          #   tests/test.sh:264        SC2012  -> find ... -printf
-          #   tests/argv-differential.sh:70,75,76,77
-          #                            SC2016  -> satır bazında
-          #                                     # shellcheck disable=SC2016
-          # tests/smoke.sh ise DENETLENİR — temiz.
+          # tests/test.sh ve tests/argv-differential.sh DENETLENİR —
+          # Task 5/6'da tescilli taban çizgisiydi (SC2012, SC1087, 4×SC2016);
+          # hepsi düzeltildi, ikisi de temiz. Yeni bulgu çıkarsa CI yakalar.
+          # src/bin/* glob'u KULLANILMAZ: python3 shebang'li iki dosya
+          # (cachy-notify-action.py, cachy-agent-usage-panel) SC1071 verir.
+          # Ek olarak `bash -e` (GitHub'ın varsayılanı) son komutun durumunu
+          # doğrudan adım durumuna taşır.
           shellcheck -x src/bin/cachy-agent src/bin/cachy-agent-agents \
                        src/bin/cachy-agent-crash src/bin/cachy-agent-install \
                        src/bin/cachy-agent-menu src/bin/cachy-agent-open \
@@ -97,7 +93,8 @@ jobs:
                        src/bin/cachy-agent-usage-oneline \
                        src/bin/cachy-agent-usage-opencode src/bin/cachy-agent-usage-update \
                        src/bin/cachy-crash-watch \
-                       install.sh uninstall.sh tests/smoke.sh
+                       install.sh uninstall.sh tests/smoke.sh \
+                       tests/test.sh tests/argv-differential.sh
 
       - name: smoke
         run: ./tests/smoke.sh

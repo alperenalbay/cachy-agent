@@ -60,6 +60,11 @@ export ARGV_LOG
 
 # stub_yaz <dizin> <ajan> [--help metni]
 # --help metni boşsa stub --help'e düşmez (o ajan için yardım metni sorulmaz).
+#
+# shellcheck disable=SC2016
+# Gövdedeki tüm printf'ler ÇALIŞTIRILACAK kabuk kaynağı üretir (stub dosyası);
+# konumsal parametreler ve $@ kasıtlı olarak genişletilmez. Tek tırnak burada
+# bir hata değil, mekanizmanın kendisi.
 stub_yaz() {
   local d="$1" ajan="$2" yardim="$3"
   mkdir -p "$d"

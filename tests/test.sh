@@ -261,7 +261,7 @@ CACHY_AGENT_CONFIG="$SC6/agents.conf" CACHY_AGENT_BIN_DIR="$SC6/coll" XDG_STATE_
   cachy-agent-usage-update >/dev/null 2>&1; rc=$?
 # `LC_ALL=C`: 13b-4'teki gerekçeyle aynı — karşılaştırma collation'a bağımlı
 # olursa test, tr_TR altında kazara ya da kazara kırmızı olur.
-got6c="$(ls -1 "$SC6/state/cachy-agent/agents/usage" 2>/dev/null | sed 's/\.json$//' | LC_ALL=C sort | tr '\n' ' ')"
+got6c="$(find "$SC6/state/cachy-agent/agents/usage" -maxdepth 1 -name '*.json' -printf '%f\n' 2>/dev/null | sed 's/\.json$//' | LC_ALL=C sort | tr '\n' ' ')"
 want6c="s1 s2 s3 "
 if [[ $rc == 0 && "$got6c" == "$want6c" ]]; then
   ok "6c usage-update config id listesiyle birebir ayni"
@@ -576,7 +576,7 @@ for a in $("$REPO/src/bin/cachy-agent-agents" list 2>/dev/null); do
     okg="Sonraki adım: terminalde '$want' ile giriş yap"
   fi
   if [[ "$got" != "$okg" ]]; then
-    l_hata="$l_hata[$a] got='$got' bekleniyordu='$okg'; "
+    l_hata="${l_hata}[${a}] got='$got' bekleniyordu='$okg'; "
   fi
 done
 if [[ $l_n -eq 8 && -z "$l_hata" ]]; then
@@ -1156,7 +1156,8 @@ for f in "$PFX/bin/cachy-agent" "$PFX/bin/cachy-agent-agents" "$PFX/config/cachy
          "$PFX/config/fuzzel/fuzzel.ini" "$PFX/icons/cachy-agent.svg" \
          "$PFX/bin/cachy-agent-usage-opencode" "$PFX/bin/cachy-agent-usage-codex" \
          "$PFX/bin/cachy-agent-usage-panel" "$PFX/bin/cachy-agent-usage-update" \
-         "$PFX/bin/cachy-crash-watch" "$PFX/bin/cachy-notify-action.py"; do
+         "$PFX/bin/cachy-crash-watch" "$PFX/bin/cachy-notify-action.py" \
+         "$PFX/bin/VERSION"; do
   [[ -f "$f" ]] || missing="$missing${f#"$PFX"/} "
 done
 if [[ -z "$missing" ]]; then ok "13b --prefix dosyalari yerinde"; else bad "13b --prefix" "yok: $missing"; fi
@@ -1173,6 +1174,7 @@ got_files=$(cd "$PFX" && find . -type f | sed 's#^\./##' | LC_ALL=C sort)
 want_files=$(cat <<'EOF'
 applications/cachy-agent-usage.desktop
 applications/cachy-agent.desktop
+bin/VERSION
 bin/cachy-agent
 bin/cachy-agent-agents
 bin/cachy-agent-crash

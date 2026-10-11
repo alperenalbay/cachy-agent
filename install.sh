@@ -207,6 +207,12 @@ for f in "$SRC"/bin/*; do
   chmod +x "$BIN_DIR/$(basename "$f")"
   echo "  bin: $(basename "$f")"
 done
+# VERSION: `cachy-agent --version` kurulumdan bağımsız sürümü raporlasın diye
+# bin dizinine kopyalanır. Kullanıcı repoyu taşırsa fallback kırılmaz.
+if [[ -f "$REPO_DIR/VERSION" ]]; then
+  cp -f "$REPO_DIR/VERSION" "$BIN_DIR/VERSION"
+  echo "  bin: VERSION"
+fi
 
 # fish (conf.d otomatik source'lanır, ek ayar gerekmez)
 cp -f "$SRC/fish/cachy-agent.fish" "$FISH_DIR/cachy-agent.fish"

@@ -117,6 +117,7 @@ for f in "$SRC"/bin/*; do
   rm -f "$BIN_DIR/$(basename "$f")"
   echo "  silindi: $BIN_DIR/$(basename "$f")"
 done
+rm -f "$BIN_DIR/VERSION" && echo "  silindi: $BIN_DIR/VERSION"
 rm -f "$FISH_DIR/cachy-agent.fish" && echo "  silindi: fish/cachy-agent.fish"
 for f in "$SRC"/applications/*.desktop; do
   rm -f "$APPS_DIR/$(basename "$f")"
