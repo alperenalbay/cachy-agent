@@ -365,10 +365,24 @@ sed -i "s|/usr/bin/alacritty|$STUB/alacritty|g" "$STUB/menu-test"
 cp "$REPO/src/bin/cachy-agent-agents" "$STUB/cachy-agent-agents"
 # fuzzel stub'ı stdin'deki MENÜ LİSTESİNİ de kaydeder. Bu, listenin kaynağını
 # doğrudan kanıtlar: `list` config'ten gelmiyorsa burada görünmez.
+#
+# FAKE_SEL_LIST: çok adımlı akış (varsayılan değiştirme iki ekran) için
+# satır satır seçim. Her çağrıda bir sonraki satırı basar, çağrı sayacıyla.
+# Verilmezse eski davranış (hep FAKE_SEL) korunur — mevcut testler böyle.
 cat > "$STUB/fuzzel" <<'EOF'
 #!/usr/bin/env bash
-cat > "$STUB_MENU"
-printf '%s' "$FAKE_SEL"
+# Her çağrının menüsünü NUMARALI da kaydet ($STUB_MENU.<n>): akış birden çok
+# ekrana çıkabiliyor ve son menü daima 1. ekranla bitmeyebilir (Esc 2.'den
+# 1.'e döner). Numaralı kopya olmadan 2. ekranın İÇERİĞİ doğrulanamıyor.
+_n=$(cat "$STUB_MENU_N" 2>/dev/null || printf '0'); _n=$((_n+1))
+printf '%s' "$_n" > "$STUB_MENU_N"
+cat > "$STUB_MENU.$_n"
+cat "$STUB_MENU.$_n" > "$STUB_MENU"
+if [[ -n "${FAKE_SEL_LIST:-}" ]]; then
+  sed -n "${_n}p" "$FAKE_SEL_LIST"
+else
+  printf '%s' "$FAKE_SEL"
+fi
 EOF
 # alacritty stub'ı YALNIZCA kendisine verilen argv'yi kaydeder, `-e` sonrasını
 # çalıştırmaz. Bu yüzden "install CALLED" diye bir iz YOKTUR ve olmamalıdır:
@@ -389,6 +403,14 @@ EOF
 # ve kullanıcıya bildirim GÖNDERMEYİ (assert sırasında olsa da görsel gürültü).
 cat > "$STUB/cachy-agent" <<'EOF'
 #!/usr/bin/env bash
+# TEK ARGÜMANLI `default` = OKUMA yolu (menü mevcut varsayılanı soruyor).
+# İki+ argümanlı = YAZMA yolu (menü varsayılanı değiştiriyor) -> log'a.
+# Ayrım şart: okuma stdout'a değer basmalı, yoksa menü yanlış "varsayılan yok"
+# sanıp hiçbir satıra tik koymaz.
+if [[ "${1:-}" == "default" && $# -eq 1 ]]; then
+  printf '%s\n' "${FAKE_DEFAULT:-agy}"
+  exit 0
+fi
 printf 'DEFAULT CALLED: %s\n' "$*" >> "$STUB_LOG"
 exit 0
 EOF
@@ -400,6 +422,8 @@ EOF
 chmod +x "$STUB/fuzzel" "$STUB/alacritty" "$STUB/cachy-agent-install" "$STUB/cachy-agent" "$STUB/notify-send"
 export STUB_LOG="$STUB/calls.log"
 export STUB_MENU="$STUB/menu.txt"
+export STUB_MENU_N="$STUB/menu.n"
+STUB_SEL_LIST="$STUB/sel-list.txt"
 export PATH="$STUB:$PATH"
 # Ruling 10 seam'i: menü/open/install/usage-update kardeş binary'leri BURADAN
 # çözer. `PATH`'e de ekleniyor çünkü 10l `cachy-agent-agents`'i test 11'de
@@ -412,10 +436,18 @@ export CACHY_AGENT_CONFIG="$REPO/tests/fixtures/agents-valid.conf"
 FAKE_SEL="+ codex (kur)" bash "$STUB/menu-test" >/dev/null 2>&1 || true
 if grep -q "cachy-agent-install" "$STUB_LOG" && grep -q "codex" "$STUB_LOG"; then ok "10a menu '+ x (kur)' install'e gider"; else bad "10a menu '+ x (kur)'" "log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
 
-# 10b. ayraç satırı -> sessiz exit 0, çağrı yok
-: > "$STUB_LOG"
-FAKE_SEL="──────────────────" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
-if [[ $rc == 0 && ! -s "$STUB_LOG" ]]; then ok "10b menu ayraç yoksayılır"; else bad "10b menu ayraç" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
+# 10b. ayraç satırı -> HİÇBİR komut çağrılmaz, menüde kalınır (Esc ile çıkılır)
+# FAKE_SEL_LIST kullanılır: ayraç seçimi menüyü yeniden açar, dolayısıyla fuzzel
+# İKİ kez çağrılmalıdır. Düz FAKE_SEL ile sonsuz döngüye girer (ölçüldü:
+# ayraç -> continue -> aynı ayraç -> ...). Beklenen davranışı iki çağrıyla
+# sabitlemek hem doğru hem sonlu.
+: > "$STUB_LOG"; rm -f "$STUB_MENU_N"
+printf '%s\n%s\n' '──────────────────────────────' '' > "$STUB_SEL_LIST"
+FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+_b_n=$(cat "$STUB_MENU_N" 2>/dev/null || echo 0)
+if [[ $rc == 0 && ! -s "$STUB_LOG" && "$_b_n" -eq 2 ]]; then
+  ok "10b menu ayraci yoksayilir, menude kalir"
+else bad "10b menu ayraç" "exit=$rc fuzzel_cağrı=$_b_n log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
 
 # 10c. düz agent satırı -> `cachy-agent-open` (config'de tanımlı olmalı)
 : > "$STUB_LOG"
@@ -424,25 +456,85 @@ if [[ $rc == 0 ]] && grep -q 'cachy-agent-open' "$STUB_LOG" && grep -qx 'codex' 
   ok "10c menu düz ad -> -open"
 else bad "10c menu düz ad" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
 
-# 10d. "★ x (varsayılan yap)" -> `cachy-agent default x` (stub'lanır, gerçek
-# varsayılan agent değişmez)
+# 10d. ★ satırları ARTIK ÜRETİLMİYOR — her kurulu agent yalnız BİR kez
+# listelenir. Önceki hâlde menü düz liste + ★ listesi olmak üzere agent'i iki
+# kez gösteriyordu (5 agent → 9+ satır) ve hangisinin varsayılan olduğu
+# hiçbir yerde görünmüyordu.
 : > "$STUB_LOG"
-FAKE_SEL="★ codex (varsayılan yap)" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
-if [[ $rc == 0 ]] && grep -q 'DEFAULT CALLED: default codex' "$STUB_LOG"; then
-  ok "10d menu '★ x' -> default x"
-else bad "10d menu '★ x'" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
+FAKE_DEFAULT=agy FAKE_SEL="" bash "$STUB/menu-test" >/dev/null 2>&1
+if ! grep -q '★' "$STUB_MENU" && ! grep -q 'varsayılan yap' "$STUB_MENU"; then
+  ok "10d menüde tekrar eden ★ satırı yok"
+else bad "10d ★ tekrarı" "menu='$(tr '\n' '/' < "$STUB_MENU")'"; fi
+
+# --- Yeni menü şekli (kullanıcı isteği): her agent TEK satır, mevcut
+# varsayılan ✓ ile işaretli, varsayılan değiştirme AYRI bir adımda.
+# Önceki hâlde her kurulu agent İKİ kez listeleniyordu (düz + ★), 5 agent için
+# 9+ satır; ve hangisinin varsayılan olduğu HİÇBİR yerde görünmüyordu.
+#
+# 10n. Birinci ekran: mevcut varsayılan ✓ işaretli, düz satır YOK (tekrar yok),
+#      ve "varsayılanı değiştir" adımı görünür.
+: > "$STUB_LOG"
+FAKE_DEFAULT=agy FAKE_SEL="" bash "$STUB/menu-test" >/dev/null 2>&1
+_menu_n=$(cat "$STUB_MENU" 2>/dev/null)
+if grep -qx '✓ agy' "$STUB_MENU" \
+   && ! grep -qx 'agy' "$STUB_MENU" \
+   && grep -q 'Varsayılanı değiştir' "$STUB_MENU"; then
+  ok "10n menü varsayılanı ✓ ile işaretler, tekrar yok, değiştir adımı var"
+else bad "10n menü ✓ işareti" "menu='$(printf '%s' "$_menu_n" | tr '\n' '/')'"; fi
+
+# 10o. "⟲ Varsayılanı değiştir" -> İKİNCİ ekran, orada seçim varsayılanı yazar.
+# İkinci ekranın İÇERİĞİ de doğrulanır: stub her menüyü numaralı saklar,
+# çünkü akış birden çok ekrana çıkabiliyor ve "son menü" daima 1. ekran değil
+# (Esc 2.'den 1.'e döner). Şu anki varsayılan "✓ x (şu anki)" olarak, diğerleri
+# "(varsayılan yap)" ile görünmeli.
+: > "$STUB_LOG"; rm -f "$STUB_MENU_N" "$STUB_MENU".*
+printf '%s\n%s\n' '⟲ Varsayılanı değiştir' '  claude (varsayılan yap)' > "$STUB_SEL_LIST"
+FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+if [[ $rc -eq 0 ]] \
+   && grep -q 'DEFAULT CALLED: default claude' "$STUB_LOG" \
+   && grep -qx '✓ agy (şu anki)' "$STUB_MENU.2" \
+   && grep -qx '  claude (varsayılan yap)' "$STUB_MENU.2"; then
+  ok "10o 'varsayılanı değiştir' ikinci ekranı açar ve seçimi yazar"
+else bad "10o iki ekranlı akış" "exit=$rc ekran2='$(tr '\n' '/' < "$STUB_MENU.2" 2>/dev/null)' log=$(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
+
+
+# 10p. İkinci ekranda Esc (boş seçim) -> birinci ekrana DÖNER, çıkmaz.
+# Yalnız "log boş" demek YETERSİZ: yeni akışta olmayan yolda da log boş
+# kalır ve test yanlış yeşil verir (ölçüldü). Bu yüzden fuzzel'in KAÇ KEZ
+# çağrıldığı sayılır: akış gerçekten ikinci ekranı açmış olmalı (2 çağrı).
+: > "$STUB_LOG"; rm -f "$STUB_MENU_N"
+printf '%s\n%s\n' '⟲ Varsayılanı değiştir' '' > "$STUB_SEL_LIST"
+FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+_p_n=$(cat "$STUB_MENU_N" 2>/dev/null || echo 0)
+if [[ $rc == 0 && "$_p_n" -ge 2 && ! -s "$STUB_LOG" ]]; then
+  ok "10p ikinci ekranda Esc birinciye döner"
+else bad "10p Esc dönüşü" "exit=$rc fuzzel_cağrı=$_p_n log=$(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
+
+# 10q. ✓ satırı birinci ekranda da düz ad gibi açılır (tik ayrı bir eylem değil)
+: > "$STUB_LOG"
+FAKE_DEFAULT=agy FAKE_SEL="✓ agy" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+if [[ $rc == 0 ]] && grep -q 'cachy-agent-open' "$STUB_LOG" && grep -qx 'agy' "$STUB_LOG"; then
+  ok "10q menü '✓ x' -> x'i açar"
+else bad "10q '✓ x'" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
 
 # 10e. CONFIG'DE OLMAYAN ad -> hicbir komut çağrılmaz, sessiz exit 0.
 # Eski sabit `case` listesi yerine `known` konduğu için bu, listeden
 # kaldırılmış/kataloğa hiç girmemiş bir ajanın menüye sızamamasını kilitler.
-: > "$STUB_LOG"
-FAKE_SEL="uydurma" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
-if [[ $rc == 0 && ! -s "$STUB_LOG" ]]; then ok "10e menu bilinmeyen ad reddedilir"; else bad "10e menu bilinmeyen ad" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
+: > "$STUB_LOG"; rm -f "$STUB_MENU_N"
+FAKE_DEFAULT=agy FAKE_SEL="uydurma" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+if [[ $rc -eq 0 && ! -s "$STUB_LOG" ]]; then
+  ok "10e menu bilinmeyen ad reddeder"
+else bad "10e menu bilinmeyen ad" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
 
-# 10f. "★ " dalında config'de olmayan ad -> default ÇAĞRILMAZ
-: > "$STUB_LOG"
-FAKE_SEL="★ uydurma (varsayılan yap)" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
-if [[ $rc == 0 && ! -s "$STUB_LOG" ]]; then ok "10f menu '★ bilinmeyen' reddedilir"; else bad "10f menu '★ bilinmeyen'" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
+# 10f. 2. ekranda ŞU ANKİ varsayılan seçilirse varsayılan YENIDEN YAZILMAZ.
+# "Kendini varsayılan yap" eylemi anlamsız; eskiden menü her kurulu agent için
+# bu satırı gösterdiği için mevcut varsayılan da listedeydi.
+: > "$STUB_LOG"; rm -f "$STUB_MENU_N"
+printf '%s\n%s\n%s\n' '⟲ Varsayılanı değiştir' '✓ agy (şu anki)' '' > "$STUB_SEL_LIST"
+FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+if [[ $rc == 0 && ! -s "$STUB_LOG" ]]; then
+  ok "10f 2. ekranda şu anki varsayılan secilince yeniden yazilmaz"
+else bad "10f şu anki varsayılan no-op" "exit=$rc log=$(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
 
 # 10g. TEK AYIRT EDİCİ TEST: listenin kaynağı config'tir, sabit literal değil.
 #
@@ -618,7 +710,7 @@ FAKE_SEL="claude" PATH="$STUB:$SYSBIN" CACHY_AGENT_CONFIG="$REPO/tests/fixtures/
   bash "$STUB/menu-test" >/dev/null 2>&1; m_rc=$?
 menu_m="$(cat "$STUB_MENU" 2>/dev/null)"
 if [[ $m_rc -eq 0 ]] \
-   && grep -qx 'claude' "$STUB_MENU" \
+   && grep -qE '^[[:space:]]*claude$' "$STUB_MENU" \
    && ! grep -q '^+ claude (kur)$' "$STUB_MENU" \
    && grep -q 'cachy-agent-open' "$STUB_LOG" \
    && grep -qx 'claude' "$STUB_LOG"; then
