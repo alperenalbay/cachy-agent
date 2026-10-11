@@ -431,6 +431,14 @@ export PATH="$STUB:$PATH"
 export CACHY_AGENT_BIN_DIR="$STUB"
 export CACHY_AGENT_CONFIG="$REPO/tests/fixtures/agents-valid.conf"
 
+# AGBIN: menü testlerinin "kurulu" görmesi gereken agent'lar. CI runner'ında
+# agy/claude/codex/... YOKTUR; testler bunlara bağımlıysa ortam kaynaklı
+# kırmızı üretirler (ölçüldü: 10n/10o). 10m zaten bu yolu kullanıyordu.
+AGBIN="$(mktemp -d)"
+for _ag in opencode agy claude codex crush copilot cursor-agent grok; do
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$AGBIN/$_ag"; chmod +x "$AGBIN/$_ag"
+done
+
 # 10a. "+ x (kur)" -> install çağrısı
 : > "$STUB_LOG"
 FAKE_SEL="+ Codex (kur)" bash "$STUB/menu-test" >/dev/null 2>&1 || true
@@ -443,7 +451,7 @@ if grep -q "cachy-agent-install" "$STUB_LOG" && grep -q "codex" "$STUB_LOG"; the
 # sabitlemek hem doğru hem sonlu.
 : > "$STUB_LOG"; rm -f "$STUB_MENU_N"
 printf '%s\n%s\n' '──────────────────────────────' '' > "$STUB_SEL_LIST"
-FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" PATH="$STUB:$AGBIN:$PATH" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
 _b_n=$(cat "$STUB_MENU_N" 2>/dev/null || echo 0)
 if [[ $rc == 0 && ! -s "$STUB_LOG" && "$_b_n" -eq 2 ]]; then
   ok "10b menu ayraci yoksayilir, menude kalir"
@@ -461,7 +469,7 @@ else bad "10c menu düz ad" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo
 # kez gösteriyordu (5 agent → 9+ satır) ve hangisinin varsayılan olduğu
 # hiçbir yerde görünmüyordu.
 : > "$STUB_LOG"
-FAKE_DEFAULT=agy FAKE_SEL="" bash "$STUB/menu-test" >/dev/null 2>&1
+FAKE_DEFAULT=agy FAKE_SEL="" PATH="$STUB:$AGBIN:$PATH" bash "$STUB/menu-test" >/dev/null 2>&1
 if ! grep -q '★' "$STUB_MENU" && ! grep -q 'varsayılan yap' "$STUB_MENU"; then
   ok "10d menüde tekrar eden ★ satırı yok"
 else bad "10d ★ tekrarı" "menu='$(tr '\n' '/' < "$STUB_MENU")'"; fi
@@ -474,7 +482,7 @@ else bad "10d ★ tekrarı" "menu='$(tr '\n' '/' < "$STUB_MENU")'"; fi
 # 10n. Birinci ekran: mevcut varsayılan ✓ işaretli, düz satır YOK (tekrar yok),
 #      ve "varsayılanı değiştir" adımı görünür.
 : > "$STUB_LOG"
-FAKE_DEFAULT=agy FAKE_SEL="" bash "$STUB/menu-test" >/dev/null 2>&1
+FAKE_DEFAULT=agy FAKE_SEL="" PATH="$STUB:$AGBIN:$PATH" bash "$STUB/menu-test" >/dev/null 2>&1
 _menu_n=$(cat "$STUB_MENU" 2>/dev/null)
 if grep -qx '✓ agy' "$STUB_MENU" \
    && ! grep -qx 'agy' "$STUB_MENU" \
@@ -489,7 +497,7 @@ else bad "10n menü ✓ işareti" "menu='$(printf '%s' "$_menu_n" | tr '\n' '/')
 # "(varsayılan yap)" ile görünmeli.
 : > "$STUB_LOG"; rm -f "$STUB_MENU_N" "$STUB_MENU".*
 printf '%s\n%s\n' '⟲ Varsayılanı değiştir' '  Claude Code (varsayılan yap)' > "$STUB_SEL_LIST"
-FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" PATH="$STUB:$AGBIN:$PATH" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
 if [[ $rc -eq 0 ]] \
    && grep -q 'DEFAULT CALLED: default claude' "$STUB_LOG" \
    && grep -qx '✓ agy (şu anki)' "$STUB_MENU.2" \
@@ -504,7 +512,7 @@ else bad "10o iki ekranlı akış" "exit=$rc ekran2='$(tr '\n' '/' < "$STUB_MENU
 # çağrıldığı sayılır: akış gerçekten ikinci ekranı açmış olmalı (2 çağrı).
 : > "$STUB_LOG"; rm -f "$STUB_MENU_N"
 printf '%s\n%s\n' '⟲ Varsayılanı değiştir' '' > "$STUB_SEL_LIST"
-FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" PATH="$STUB:$AGBIN:$PATH" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
 _p_n=$(cat "$STUB_MENU_N" 2>/dev/null || echo 0)
 if [[ $rc == 0 && "$_p_n" -ge 2 && ! -s "$STUB_LOG" ]]; then
   ok "10p ikinci ekranda Esc birinciye döner"
@@ -512,7 +520,7 @@ else bad "10p Esc dönüşü" "exit=$rc fuzzel_cağrı=$_p_n log=$(cat "$STUB_LO
 
 # 10q. ✓ satırı birinci ekranda da düz ad gibi açılır (tik ayrı bir eylem değil)
 : > "$STUB_LOG"
-FAKE_DEFAULT=agy FAKE_SEL="✓ agy" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+FAKE_DEFAULT=agy FAKE_SEL="✓ agy" PATH="$STUB:$AGBIN:$PATH" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
 if [[ $rc == 0 ]] && grep -q 'cachy-agent-open' "$STUB_LOG" && grep -qx 'agy' "$STUB_LOG"; then
   ok "10q menü '✓ x' -> x'i açar"
 else bad "10q '✓ x'" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
@@ -521,7 +529,7 @@ else bad "10q '✓ x'" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ
 # Eski sabit `case` listesi yerine `known` konduğu için bu, listeden
 # kaldırılmış/kataloğa hiç girmemiş bir ajanın menüye sızamamasını kilitler.
 : > "$STUB_LOG"; rm -f "$STUB_MENU_N"
-FAKE_DEFAULT=agy FAKE_SEL="uydurma" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+FAKE_DEFAULT=agy FAKE_SEL="uydurma" PATH="$STUB:$AGBIN:$PATH" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
 if [[ $rc -eq 0 && ! -s "$STUB_LOG" ]]; then
   ok "10e menu bilinmeyen ad reddeder"
 else bad "10e menu bilinmeyen ad" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
@@ -531,7 +539,7 @@ else bad "10e menu bilinmeyen ad" "exit=$rc log: $(cat "$STUB_LOG" 2>/dev/null |
 # bu satırı gösterdiği için mevcut varsayılan da listedeydi.
 : > "$STUB_LOG"; rm -f "$STUB_MENU_N"
 printf '%s\n%s\n%s\n' '⟲ Varsayılanı değiştir' '✓ agy (şu anki)' '' > "$STUB_SEL_LIST"
-FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" PATH="$STUB:$AGBIN:$PATH" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
 if [[ $rc == 0 && ! -s "$STUB_LOG" ]]; then
   ok "10f 2. ekranda şu anki varsayılan secilince yeniden yazilmaz"
 else bad "10f şu anki varsayılan no-op" "exit=$rc log=$(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
