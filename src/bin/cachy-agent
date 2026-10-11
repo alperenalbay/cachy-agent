@@ -97,7 +97,16 @@ case "$cmd" in
       fi
       echo "$2" > "$DEFAULT_FILE"
     fi
-    cat "$DEFAULT_FILE"
+    # `default_agent()` — `cat "$DEFAULT_FILE"` DEĞİL.
+    # `default-agent` dosyası `install.sh` tarafından oluşturulmaz (kurulum
+    # yalnızca `agents.conf` yazar); dosya ancak kullanıcı bir kez
+    # `cachy-agent default <ad>` çalıştırınca var olur. `cat` burada
+    # `set -euo pipefail` altında ham "cat: ... No such file" basıp exit 1
+    # döndürüyordu — yani sıfırdan kurulumda ilk çalıştırılan komut hata veriyor
+    # ve kullanıcı varsayılanın ne olduğunu öğrenemiyordu. Aynı değeri
+    # kullanan `default_agent()` (satır 7) `opencode`'a düşüyor; bu dal da
+    # onunla aynı davranışı vermeli. Ölçüm: task-5-report.md §3.
+    default_agent
     ;;
   crash)
     shift || true
