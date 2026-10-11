@@ -23,6 +23,9 @@ cachy-agent --prompt "Crash diagnose: comm=$COMM pid=$PID. coredump: $DUMP. logs
   >"$_analiz" 2>&1 &
 _apid=$!
 _sn=0
+# İlk satır HEMEN basılır: döngüdeki ilk `sleep 2` boyunca ekran boş kalıp
+# "donmuş" izlenimi yaratıyordu (kullanıcı raporu).
+printf '\r>> Analiz sürüyor... %03d sn (pencere kapatmayın)' "$_sn"
 while kill -0 "$_apid" 2>/dev/null; do
   sleep 2; _sn=$((_sn+2))
   printf '\r>> Analiz sürüyor... %03d sn (pencere kapatmayın)' "$_sn"
