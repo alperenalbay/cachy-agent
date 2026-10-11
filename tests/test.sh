@@ -1474,6 +1474,64 @@ if [[ $rc -eq 0 && "$argv_out" == "argv: 18 ölçüm tamam" ]]; then
   ok "15 argv differential (18 olcum)"
 else bad "15 argv differential" "rc=$rc out='$(printf '%s' "$argv_out" | tr '\n' ' ')'"; fi
 
+# 19. cachy-agent-crash tanı akışı: analiz çıktısı+yürüyen-sayaç gösterilmeli.
+#
+# Kullanıcı deneyimi hatası: ">> Detaylı analiz yükleniyor..." sonrası agent
+# 1-2 dk sessiz kalıyordu; pencere donmuş gibi görünüyordu. Düzeltme: agent
+# arka planda çalışırken geçen saniyeyi gösteren bir satır olmalı ve analiz
+# yine de pencereye basılmalı.
+#
+# Stub'lar: coredumpctl/journalctl (sahte crash kaydı), cachy-agent (--prompt'a
+# 3 sn uyuyup sahte analiz basar), cachy-agent-open (argümanlarını kaydeder).
+# PTY şart değil — ilerleme satırı \r ile yazılır, grep 'Analiz sürüyor' bulur.
+SCRATCH19=$(mktemp -d)
+export STUB19_LOG="$SCRATCH19/open.log"
+mkdir -p "$SCRATCH19/stub"
+cat > "$SCRATCH19/stub/coredumpctl" <<'EOF'
+#!/usr/bin/env bash
+printf 'PID: 12345 (steam)\nSignal: 11 (SEGV) si_code: SEGV_MAPERR\n'
+EOF
+cat > "$SCRATCH19/stub/journalctl" <<'EOF'
+#!/usr/bin/env bash
+printf 'steam journal satiri\n'
+EOF
+cat > "$SCRATCH19/stub/cachy-agent" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == "default" ]] && { printf 'agy\n'; exit 0; }
+if [[ "${1:-}" == "--prompt" ]]; then sleep 3; printf 'FAKE-ANALIZ-ÇIKTISI\n'; exit 0; fi
+printf 'stub-agent: %s\n' "$*" >> "$STUB19_LOG"
+exit 0
+EOF
+cat > "$SCRATCH19/stub/cachy-agent-open" <<'EOF'
+#!/usr/bin/env bash
+printf 'OPEN-CALLED: %s\n' "$*" >> "$STUB19_LOG"
+exit 0
+EOF
+chmod +x "$SCRATCH19"/stub/*
+crash19_out=$(PATH="$SCRATCH19/stub:$PATH" bash "$BIN/cachy-agent-crash" 12345 steam 2>&1); rc19=$?
+if [[ $rc19 -eq 0 && "$crash19_out" == *"FAKE-ANALIZ-ÇIKTISI"* ]]; then
+  ok "19a crash analizi pencereye basiliyor"
+else bad "19a crash analizi" "rc=$rc19 out='$(printf '%s' "$crash19_out" | tail -3 | tr '\n' '/')'"; fi
+if [[ "$crash19_out" == *"Analiz sürüyor"* && "$crash19_out" == *" sn"* ]]; then
+  ok "19b analiz sırasında geçen süre gösteriliyor"
+else bad "19b süre göstergesi" "out='$(printf '%s' "$crash19_out" | grep -c 'Analiz sürüyor') satır'"; fi
+if grep -q "OPEN-CALLED" "$STUB19_LOG" 2>/dev/null; then
+    ok "19c akış cachy-agent-open'a devrediliyor"
+  else bad "19c open'a devir" "log='$(cat "$STUB19_LOG" 2>/dev/null | tr '\n' '/')'"; fi
+# 19d: agent patlarsa hata mesajı + exit 1 (sessiz pencere kapanışı yok)
+cat > "$SCRATCH19/stub/cachy-agent" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "default" ]]; then printf 'agy\n'; exit 0; fi
+if [[ "${1:-}" == "--prompt" ]]; then echo "error: interrupted" >&2; exit 1; fi
+exit 0
+EOF
+chmod +x "$SCRATCH19/stub/cachy-agent"
+crash19b=$(PATH="$SCRATCH19/stub:$PATH" bash "$BIN/cachy-agent-crash" 12345 steam 2>&1); rc19b=$?
+if [[ $rc19b -eq 1 && "$crash19b" == *"Agent çalıştırılamadı"* ]]; then
+  ok "19d agent patlarsa hata mesajı + exit 1"
+else bad "19d agent hata yolu" "rc=$rc19b out='$(printf '%s' "$crash19b" | tail -3 | tr '\n' '/')'"; fi
+rm -rf "$SCRATCH19"
+
 # SKIP exit code'u ETKİLEMEZ: yalnızca gerçek kırmızılar (FAIL) hata sayılır.
 # Atlanan testler ortam eksikliğidir, ürün hatası değil.
 printf '\nÖzet: %d geçti, %d kaldı, %d atlandı (toplam %d)\n' "$PASS" "$FAIL" "$SKIP" "$((PASS+FAIL+SKIP))"

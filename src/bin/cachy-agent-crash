@@ -15,10 +15,28 @@ case "$SIG:${CODE:-}" in
   *) echo ">> Ön-teşhis: sinyal $SIG ${CODE:-bilinmiyor} — detay agent analizinde." ;;
 esac
 echo ">> Detaylı analiz yükleniyor..."
-cachy-agent --prompt "Crash diagnose: comm=$COMM pid=$PID. coredump: $DUMP. logs: $LOGS. SKILL: ~/.config/opencode/skills/diagnose-crash/SKILL.md" || {
+# Agent arka planda çalışır; öndeki sayaç pencerenin donmadığını gösterir.
+# Analiz çıktısı dosyaya yazılır, sayaç bittiğinde pencereye basılır — böylece
+# ilerleme çıktısı ile analiz çıktısı iç içe girmez.
+_analiz=$(mktemp)
+cachy-agent --prompt "Crash diagnose: comm=$COMM pid=$PID. coredump: $DUMP. logs: $LOGS. SKILL: ~/.config/opencode/skills/diagnose-crash/SKILL.md" \
+  >"$_analiz" 2>&1 &
+_apid=$!
+_sn=0
+while kill -0 "$_apid" 2>/dev/null; do
+  sleep 2; _sn=$((_sn+2))
+  printf '\r>> Analiz sürüyor... %03d sn (pencere kapatmayın)' "$_sn"
+done
+if wait "$_apid"; then _arc=0; else _arc=$?; fi
+printf '\r\033[K'
+if (( _arc != 0 )); then
+  cat "$_analiz" 2>/dev/null || true
+  rm -f "$_analiz"
   echo "Agent çalıştırılamadı (giriş/login gerekli olabilir). Manuel dene: cachy-agent --inline" >&2
   read -rp "Kapatmak için Enter..." || true
   exit 1
-}
+fi
+cat "$_analiz"
+rm -f "$_analiz"
 SEED_DUMP=$(echo "$DUMP" | head -25 | head -c 1500)
 exec cachy-agent-open "$(cachy-agent default)" "Az önce pid=$PID comm=$COMM crash'ini diagnose ettin (sinyal=$SIG si_code=$CODE). Coredump özeti: $SEED_DUMP. Kullanıcının fix komutlarını bekle, onay almadan yıkıcı işlem yapma."
