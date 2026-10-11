@@ -12,6 +12,30 @@
 # `|| true` / `if !` kalıbı kullanır; -e bu akışları bozar.
 set -uo pipefail
 
+# SÖZLEŞME: config bir PARSER'dır ve bir parser'ın eşleşmeleri
+# ORTAK DİLİM (collation) BAĞIMSIZ olmalıdır.
+#
+# `[[ "$id" =~ ^[A-Za-z0-9_-]+$ ]]` bash'in POSIX karakter ARAKLIKLARINI
+# collation ile yorumlar. tr_TR.UTF-8 altında `i` ve `ı` ayrı harflerdir;
+# `[A-Za-z]` içinde `I` vardır ama `i` YOKTUR. Sonuc: id `copilot` REDDEDILIR
+# (i içermiyor) — kullanıcının kendi gecerli config'i reddedilir.
+#
+# Bu satır olmadan her test subagent'i C locale altinda calistigi icin
+# gorunmez kalirdi. LC_COLLATE=C her esleme deterministik kilar.
+#
+# DIKKAT: `[[:alnum:]]` veya araligi yeniden siralamak COZUM DEGIL — tr
+# collation altinda `ı`/`İ` de kabul edilir. C collation dogru semantik.
+#
+# `LC_ALL` once `LC_COLLATE`'yi EZER. Yalniz `export LC_COLLATE=C` yazmak,
+# cagirinin `LC_ALL=tr_TR.UTF-8` dedigi durumda (regresyon testi tam olarak
+# boyle birakilir) HIC BIR SEY yapmaz. Olcum:
+#   LC_ALL=tr_TR.UTF-8 bash -c 'LC_COLLATE=C; [[ copilot =~ ^[A-Za-z0-9_-]+$ ]]'
+#     -> basarisiz (LC_ALL ortusur)
+# Bu yuzden once LC_ALL kaldirilir; boylece LC_COLLATE gercekten gecerli olur
+# ve LC_CTYPE (LANG'den) dokunulmaz — sadece SIRALAMA sabitlenir.
+unset LC_ALL
+export LC_COLLATE=C
+
 PROG="cachy-agent-agents"
 CONF="${CACHY_AGENT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cachy-agent/agents.conf}"
 
