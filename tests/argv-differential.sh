@@ -243,6 +243,28 @@ if [[ "$N" -ne "$beklenen_adet" ]]; then
   SAPMA=$((SAPMA+1))
 fi
 
+# ÇOK KELİMELİ PROMPT SINIR TESTİ (baseline tablosunun DIŞINDA, ayrı ölçüm).
+#
+# Neden ayrı: normalize() köşeli parantezleri SÖNDÜRÜP düz metne çeviriyor,
+# yani düz karşılaştırma "tek argüman" ile "birden çok argüman"ı
+# AYIRT EDEMEZ. run_agent'ta `"$*"` -> `$*` gibi bir tırnak düşürme
+# (word splitting) çok kelimeli promptu böler ve 18 ölçümün TAMAMI yeşil
+# kalır — mutasyonla kanıtlandı. Ham stub logunda ise her argüman [..]
+# içinde durur, sınır orada görünür.
+if [[ -z "$FILTRE" || "$FILTRE" == "codex" ]]; then
+  : > "$ARGV_LOG"
+  # codex seçildi: bayrak tarafları ölçümü kirletmesin diye en kısa yol.
+  calistir "$SCRATCH/stub_codex" codex "çok kelimeli prompt denemesi"
+  # Başarıda ÇIKTI ÜRETMEZ: '--check' çıktısı sözleşmesi (test 15) tam olarak
+  # "argv: N ölçüm tamam" diyor; ek bir satır onu kırıyordu. Yalnız sapmada
+  # konuşuruz — araç zaten sapmayı bu satırla bildirir.
+  grep -q '\[çok kelimeli prompt denemesi\]' "$ARGV_LOG" || {
+    printf 'FAIL: prompt birden çok argümana bölündü — ham log: %s\n' \
+           "$(head -n 1 "$ARGV_LOG")"
+    SAPMA=$((SAPMA+1))
+  }
+fi
+
 if [[ "$SAPMA" -ne 0 ]]; then
   printf 'argv: %d ölçümden %d tanesi sapmada\n' "$N" "$SAPMA"
   exit 1

@@ -685,6 +685,20 @@ if "$AG" check >/dev/null 2>&1; then ok "11b check gecerli config exit 0"; else 
 export CACHY_AGENT_CONFIG="$FIX/agents-broken.conf"
 neg "11c check bozuk config exit 1 + gerekce" "*:2:*alan*" "$AG" check
 
+# 11-empty: en az bir agent satiri olmali. Bos (veya yalnizca yorum iceren)
+# config sessizce GECERLI sayiliyordu; boyle bir config ile katalog bos
+# kalir, `list` bos doner ve menude hic agent gorunmez — hicbir hata
+# ciktisi olmadan. Yanlislikla kirpilan config'i yakalamak icin.
+_bos_conf="$SCRATCH/agents-bos.conf"; : > "$_bos_conf"
+_yorum_conf="$SCRATCH/agents-yorum.conf"; printf '# sadece yorum\n' > "$_yorum_conf"
+for _v in bos yorum; do
+  eval "_c=\${_${_v}_conf}"
+  export CACHY_AGENT_CONFIG="$_c"
+  neg "11-empty ${_v} config exit 1" "*en az bir agent*" "$AG" check
+done
+# 11d/11e bu değişkenin agents-broken.conf olmasına dayanıyor — geri yükle
+export CACHY_AGENT_CONFIG="$FIX/agents-broken.conf"
+
 # 11d: bozuk config -> list exit 1, stderr config yolu + satir no
 neg "11d list bozuk config exit 1 + yol:2" "$FIX/agents-broken.conf:2:" "$AG" list
 
@@ -695,6 +709,21 @@ if [[ "$err" == *":2:"* ]]; then ok "11e eksik alan satir numarasiyla"; else bad
 # 11f: config dosyasi YOK -> exit 1 + "config dosyası yok"
 export CACHY_AGENT_CONFIG="$SCRATCH/yok.conf"
 neg "11f config yok exit 1" "config dosyası yok" "$AG" list
+
+# 11t: `json` çıktısı kontrol karakteri içeren adlarda da GEÇERLİ JSON olmalı.
+# Plasmoid `JSON.parse(stdout)` yapıyor (main.qml): name içinde TAB gibi bir
+# kontrol karakteri kaçışlanmazsa çıktı bozulur ve agent listesi TAMAMEN
+# kaybolur. `check` bu config'i doğru reddediyor ama kimse `check` çağırmıyor
+# (install.sh/plasmoid/systemd hiçbir yerde çağırmıyor), yani `json` yolunun
+# kendisi dayanıklı olmak zorunda — kir girdi, geçerli JSON çıksın.
+TABCONF="$SCRATCH/agents-tab.conf"
+printf 'myagent=Claude\tCode|cli|install|-|-|-\n' > "$TABCONF"
+export CACHY_AGENT_CONFIG="$TABCONF"
+if "$AG" json 2>/dev/null | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
+  ok "11tab json kontrol karakterinde gecerli"
+else
+  bad "11tab json kontrol karakteri kacisi" "cikti parse edilemedi (TAB islenmedi)"
+fi
 
 # 11g: bilinmeyen id -> get exit 1, stdout bos, stderr mesaj
 export CACHY_AGENT_CONFIG="$FIX/agents-valid.conf"
@@ -1050,7 +1079,7 @@ fi
 # tüm yollar geçici bir dizinin altına yazılır.
 #
 # Alt dizin yapısı (plan Task 4 Step 4'te SABİTLENMİŞTİR):
-#   $PFX/bin/ · $PFX/config/cachy-agent/ · $PFX/config/fish/conf.d/
+#   ${PFX}/.local/bin/ · $PFX/config/cachy-agent/ · $PFX/config/fish/conf.d/
 #   $PFX/config/systemd/user/ · $PFX/config/fuzzel/ · $PFX/applications/
 #   $PFX/icons/ · $PFX/plasmoids/org.cachyagent.usage/
 #   ($PFX/state/ YARATILMAZ — I2, aşağıda)
@@ -1136,7 +1165,7 @@ if pfx_run "$REPO/install.sh" "$PFX"; then a_rc=0; else a_rc=$?; fi
 # dolduğunu da iddia ediyor. `--prefix`'i yok sayan bir script exit 0 döndüğü
 # halde burada KIRMIZI olur — çünkü ağaç boş kalır.
 a_tree=1
-for f in "$PFX/bin/cachy-agent" "$PFX/config/cachy-agent/agents.conf"; do
+for f in "${PFX}/.local/bin/cachy-agent" "$PFX/config/cachy-agent/agents.conf"; do
   [[ -f "$f" ]] && a_tree=0
 done
 if [[ $a_rc -eq 0 && $a_tree -eq 0 ]]; then
@@ -1145,7 +1174,7 @@ else
   bad "13a install --prefix" "rc=$a_rc agac_dolu=$((1-a_tree)) — rc=0 tek basina yeterli degil"
 fi
 missing=""
-for f in "$PFX/bin/cachy-agent" "$PFX/bin/cachy-agent-agents" "$PFX/config/cachy-agent/agents.conf" \
+for f in "${PFX}/.local/bin/cachy-agent" "${PFX}/.local/bin/cachy-agent-agents" "$PFX/config/cachy-agent/agents.conf" \
          "$PFX/config/fish/conf.d/cachy-agent.fish" \
          "$PFX/applications/cachy-agent.desktop" "$PFX/applications/cachy-agent-usage.desktop" \
          "$PFX/config/systemd/user/cachy-crash-watch.service" \
@@ -1154,10 +1183,10 @@ for f in "$PFX/bin/cachy-agent" "$PFX/bin/cachy-agent-agents" "$PFX/config/cachy
          "$PFX/plasmoids/org.cachyagent.usage/metadata.json" \
          "$PFX/plasmoids/org.cachyagent.usage/contents/ui/main.qml" \
          "$PFX/config/fuzzel/fuzzel.ini" "$PFX/icons/cachy-agent.svg" \
-         "$PFX/bin/cachy-agent-usage-opencode" "$PFX/bin/cachy-agent-usage-codex" \
-         "$PFX/bin/cachy-agent-usage-panel" "$PFX/bin/cachy-agent-usage-update" \
-         "$PFX/bin/cachy-crash-watch" "$PFX/bin/cachy-notify-action.py" \
-         "$PFX/bin/VERSION"; do
+         "${PFX}/.local/bin/cachy-agent-usage-opencode" "${PFX}/.local/bin/cachy-agent-usage-codex" \
+         "${PFX}/.local/bin/cachy-agent-usage-panel" "${PFX}/.local/bin/cachy-agent-usage-update" \
+         "${PFX}/.local/bin/cachy-crash-watch" "${PFX}/.local/bin/cachy-notify-action.py" \
+         "${PFX}/.local/bin/VERSION"; do
   [[ -f "$f" ]] || missing="$missing${f#"$PFX"/} "
 done
 if [[ -z "$missing" ]]; then ok "13b --prefix dosyalari yerinde"; else bad "13b --prefix" "yok: $missing"; fi
@@ -1172,25 +1201,25 @@ if [[ -z "$missing" ]]; then ok "13b --prefix dosyalari yerinde"; else bad "13b 
 # test tarafındaki kardeşi: karşılaştırma da deterministik olmalı.)
 got_files=$(cd "$PFX" && find . -type f | sed 's#^\./##' | LC_ALL=C sort)
 want_files=$(cat <<'EOF'
+.local/bin/VERSION
+.local/bin/cachy-agent
+.local/bin/cachy-agent-agents
+.local/bin/cachy-agent-crash
+.local/bin/cachy-agent-install
+.local/bin/cachy-agent-menu
+.local/bin/cachy-agent-open
+.local/bin/cachy-agent-usage-alarm
+.local/bin/cachy-agent-usage-codex
+.local/bin/cachy-agent-usage-copilot
+.local/bin/cachy-agent-usage-fetch
+.local/bin/cachy-agent-usage-oneline
+.local/bin/cachy-agent-usage-opencode
+.local/bin/cachy-agent-usage-panel
+.local/bin/cachy-agent-usage-update
+.local/bin/cachy-crash-watch
+.local/bin/cachy-notify-action.py
 applications/cachy-agent-usage.desktop
 applications/cachy-agent.desktop
-bin/VERSION
-bin/cachy-agent
-bin/cachy-agent-agents
-bin/cachy-agent-crash
-bin/cachy-agent-install
-bin/cachy-agent-menu
-bin/cachy-agent-open
-bin/cachy-agent-usage-alarm
-bin/cachy-agent-usage-codex
-bin/cachy-agent-usage-copilot
-bin/cachy-agent-usage-fetch
-bin/cachy-agent-usage-oneline
-bin/cachy-agent-usage-opencode
-bin/cachy-agent-usage-panel
-bin/cachy-agent-usage-update
-bin/cachy-crash-watch
-bin/cachy-notify-action.py
 config/cachy-agent/agents.conf
 config/fish/conf.d/cachy-agent.fish
 config/fuzzel/fuzzel.ini
@@ -1228,6 +1257,25 @@ for f in "$PFX/applications/cachy-agent.desktop" "$PFX/applications/cachy-agent-
   grep -q "$PFX" "$f" || HOME_LEFT="$HOME_LEFT$(basename "$f"):prefix-yok "
 done
 if [[ -z "$HOME_LEFT" ]]; then ok "13b-3 __HOME__ prefix ile genisletildi"; else bad "13b-3 __HOME__ genislemesi" "$HOME_LEFT"; fi
+
+  # 13b-5. Genişletme yapılmış olması YETMEZ: üretilen Exec/fetchCommand
+  # yolları GERÇEKTEN var olmalı. Önceki hâlde binary'ler $PREFIX/bin'e
+  # giderken şablonlar __HOME__/.local/bin diyordu; 13b ve 13b-3 ikisini de
+  # geçiyordu ama üretilen bütün desktop/plasmoid girdileri VAR OLMAYAN bir
+  # yola işaret ediyordu. Yani testler yeşildi, kurulum kırıktı.
+  _yolsuz=""
+  while IFS= read -r _y; do
+    _y="${_y//\%U/}"; _y="${_y//\%u/}"
+    [[ -x "$_y" ]] || _yolsuz="$_yolsuz $(basename "$_y") "
+  done < <(grep -hoE '(Exec|fetchCommand|catalogCommand)="[^"]+"' \
+             "$PFX"/applications/*.desktop \
+             "$PFX"/plasmoids/org.cachyagent.usage/contents/ui/main.qml 2>/dev/null \
+           | sed -E 's/^[A-Za-z]+="//; s/"$//')
+  if [[ -z "$_yolsuz" ]]; then
+    ok "13b-5 uretilen tum yollar var"
+  else
+    bad "13b-5 uretilen yol yok" "yok:$_yolsuz"
+  fi
 
 # 13k (I3). `--prefix` REDDEDİLMEDEN ÖNCE mutlaklaştırılmalı ve sed'e özel
 # karakter içermemeli. Ölçülen üç sessiz bozulma:
@@ -1563,12 +1611,37 @@ else
     [[ -f "$HOME/.local/bin/$_b" ]] || { _drift="$_drift eksik:$_b "; continue; }
     cmp -s "$_f" "$HOME/.local/bin/$_b" || _drift="$_drift farkli:$_b "
   done
-  # plasmoid de aynı sepette (fetchCommand gömülü python'a bakmasın)
+  # VERSION kökte duruyor ama kurulum bin'e kopyalıyor. İlk hâlde kapsam
+  # dışıydı: sürüm 0.3.0'a çekilse bu koruma kırmızıya dönmüyordu.
+  cmp -s "$REPO/VERSION" "$HOME/.local/bin/VERSION" \
+    || _drift="$_drift farkli:VERSION "
+  # __HOME__ genişletmesi gereken dosyalar (install.sh:234/247)
+  for _f in "$REPO"/src/applications/*.desktop; do
+    _b=$(basename "$_f")
+    sed "s|__HOME__|$HOME|g" "$_f" \
+      | cmp -s - "$HOME/.local/share/applications/$_b" \
+      || _drift="$_drift farkli:$_b "
+  done
   _pm="$HOME/.local/share/plasma/plasmoids/org.cachyagent.usage/contents/ui/main.qml"
   _ps="$REPO/src/plasmoid/org.cachyagent.usage/contents/ui/main.qml"
   if [[ -f "$_pm" && -f "$_ps" ]]; then
-    sed 's|__HOME__|'"$HOME"'|g' "$_ps" | cmp -s - "$_pm" || _drift="$_drift farkli:plasmoid/main.qml "
+    sed "s|__HOME__|$HOME|g" "$_ps" | cmp -s - "$_pm" || _drift="$_drift farkli:plasmoid/main.qml "
   fi
+  # düz kopyalananlar (genişletme yok, byte-byte olmalı)
+  while read -r _s _d; do
+    [[ -z "$_s" ]] && continue
+    cmp -s "$REPO/$_s" "$HOME/$_d" || _drift="$_drift farkli:$_s "
+  done <<EOF2
+src/plasmoid/org.cachyagent.usage/metadata.json .local/share/plasma/plasmoids/org.cachyagent.usage/metadata.json
+src/fish/cachy-agent.fish .config/fish/conf.d/cachy-agent.fish
+src/fuzzel/fuzzel.ini .config/fuzzel/fuzzel.ini
+src/icons/cachy-agent.svg .local/share/icons/hicolor/scalable/apps/cachy-agent.svg
+src/systemd/cachy-crash-watch.service .config/systemd/user/cachy-crash-watch.service
+src/systemd/cachy-agent-usage-refresh.service .config/systemd/user/cachy-agent-usage-refresh.service
+src/systemd/cachy-agent-usage-refresh.timer .config/systemd/user/cachy-agent-usage-refresh.timer
+EOF2
+  # NOT: agents.conf BILerek karsilastirilmaz — install.sh yalnizca YOKSA
+  # yazar, kullanicinin duzenlemeleri kurulu kopyada yasalidir.
   if [[ -z "$_drift" ]]; then
     ok "20 kurulu kopya repo ile senkron"
   else

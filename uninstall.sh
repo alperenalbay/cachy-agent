@@ -67,7 +67,7 @@ done
 # düzeltilmedi — değiştirmek "prefix verilmediğinde hiçbir yol değişmez"
 # sözleşmesini ihlal ederdi. Bkz. task-4-report.md Endişeler.
 if [[ -n "$PREFIX" ]]; then
-  BIN_DIR="$PREFIX/bin"
+  BIN_DIR="$PREFIX/.local/bin"
   FISH_DIR="$PREFIX/config/fish/conf.d"
   SYSTEMD_DIR="$PREFIX/config/systemd/user"
   APPS_DIR="$PREFIX/applications"

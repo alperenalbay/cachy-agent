@@ -163,7 +163,12 @@ if [[ -n "$PREFIX" ]]; then
   # geçerli kalır. Config altındaki conf.d/systemd/fuzzel aynı sebepten
   # $PREFIX/config/... altındadır (XDG ağacının aynası).
   HOME_SUB="$PREFIX"
-  BIN_DIR="$PREFIX/bin"
+  # __HOME__ placeholder'ı $PREFIX'e genişler ve şablonlar
+  # `__HOME__/.local/bin/...` diyor. Bu yüzden BIN_DIR de aynı olmalı;
+  # `$PREFIX/bin` iken üretilen desktop/plasmoid girdileri VAR OLMAYAN bir
+  # yola işaret ediyordu (test 13b-3 yalnız __HOME__ kalıntısına bakıyordu,
+  # yolun var olduğuna değil).
+  BIN_DIR="$PREFIX/.local/bin"
   FISH_DIR="$PREFIX/config/fish/conf.d"
   SYSTEMD_DIR="$PREFIX/config/systemd/user"
   APPS_DIR="$PREFIX/applications"
@@ -275,13 +280,27 @@ if [[ -n "$PREFIX" ]]; then
   echo "  (atlandı: --prefix kipi — desktop-file-validate, kbuildsycoca6 ve systemctl --user çalıştırılmadı)"
 else
   if command -v desktop-file-validate >/dev/null 2>&1; then
-    desktop-file-validate "$APPS_DIR"/cachy-agent*.desktop && echo "  desktop dosyaları geçerli"
+    # `cmd && echo` DEVRESİNE GİRMEZ: set -e yalnız && zincirinin SOLU
+    # BAŞARISIZ olduğunda tetiklenmez. Ölçüldü: `set -e; false && echo X`
+    # script'i öldürmüyor. Yani geçersiz desktop girdisi kurulumu düşürmeden
+    # geçiyor ve kullanıcıya HİÇBİR şey söylenmiyordu — oysa geçersiz
+    # girdi menü simgesinin/kısayolun görünmemesi demek.
+    if desktop-file-validate "$APPS_DIR"/cachy-agent*.desktop; then
+      echo "  desktop dosyaları geçerli"
+    else
+      echo "  UYARI: desktop dosyaları GEÇERSİZ (yukarıdaki hataya bak)" >&2
+    fi
   else
     echo "  (atlandı: desktop-file-validate yok)"
   fi
   if command -v kbuildsycoca6 >/dev/null 2>&1; then
-    kbuildsycoca6 >/dev/null 2>&1 || true
-    echo "  kbuildsycoca6 çalıştı"
+    # `|| true` + koşulsuz echo, başarısızlıkta da "çalıştı" diyordu.
+    if kbuildsycoca6 >/dev/null 2>&1; then
+      echo "  kbuildsycoca6 çalıştı"
+    else
+      echo "  UYARI: kbuildsycoca6 başarısız — KDE önbelleği yenilenmedi," >&2
+      echo "         yeni simge/plasmoid görünmeyebilir" >&2
+    fi
   fi
   systemctl --user daemon-reload
   systemctl --user enable --now cachy-crash-watch.service

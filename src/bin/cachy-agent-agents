@@ -160,6 +160,16 @@ check_config() {
   local n=${#A_ID[@]} i bad=0 id name
   declare -A SEEN=()
 
+  # 0. katalog bos olamaz. Bos (veya yalnizca yorum/ WORKDIR iceren) config
+  # daha once GECERLI sayiliyordu; boyle bir config ile `list` bos doner,
+  # menude hic agent gorunmez ve HICBIR hata ciktisi olmaz. Yanlislikla
+  # kirpilan config'i sessizce kabul etmek, katalogun tek dogrulama
+  # noktasinin islevini bosaltir.
+  if (( n == 0 )); then
+    perr 1 "en az bir agent satırı olmalı (config boş veya yalnızca yorum/WORKDIR içeriyor)"
+    bad=1
+  fi
+
   for (( i=0; i<n; i++ )); do
     local ln="${A_LINE[i]}" nf="${A_NFIELD[i]}"
     id="${A_ID[i]}"; name="${A_NAME[i]}"
@@ -276,6 +286,30 @@ esac
 
 parse_config
 
+# json_kacis <metin> -> JSON gövdesi (tırnak hariç)
+#
+# Kaçışlanan: \ ve " (JSON zorunlu) + KONTROL KARAKTERLERİ (JSON'da ham
+# olarak yasak). \b \f \n \r \t adıyla, kalanları \u00XX olarak yazılır.
+#
+# Neden: önceki hâli yalnız \ ve " kaçıyordu. name içinde TAB gibi bir kontrol
+# karakteri config'te mümkün (check reddediyor ama kimse check çağırmıyor —
+# install.sh/plasmoid/systemd hiçbir yerde çağırmıyor), bu durumda json çıktısı
+# BOZULUYORDU ve plasmoid `JSON.parse(stdout)` hatası verince agent listesi
+# tamamen kayboluyordu. Kısmi kaçış (sadece \ ve ") tuzağıydı: kontrol
+# karakterleri boşlukta kalıyordu.
+json_kacis() {
+  local s="$1" i c
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"
+  s="${s//$'\b'/\\b}"; s="${s//$'\f'/\\f}"; s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"; s="${s//$'\t'/\\t}"
+  for (( i=1; i<32; i++ )); do
+    c=$(printf '%b' "\\0$(printf '%03o' "$i")")
+    [[ "$c" == $'\b' || "$c" == $'\f' || "$c" == $'\n' || "$c" == $'\r' || "$c" == $'\t' ]] && continue
+    s="${s//"$c"/\\u$(printf '%04x' "$i")}"
+  done
+  printf '%s' "$s"
+}
+
 case "$cmd" in
   list)
     for (( i=0; i<${#A_ID[@]}; i++ )); do printf '%s\n' "${A_ID[i]}"; done
@@ -309,10 +343,9 @@ case "$cmd" in
       (( i > 0 )) && printf ','
       inst=false; command -v "${A_ID[i]}" >/dev/null 2>&1 && inst=true
       ext=false; [[ "${A_INSTALL[i]}" != "-" ]] && ext=true
-      # name içindeki " ve \ kaçışlanır (check zaten reddeder, yine de güvenli)
-      esc="${A_NAME[i]//\\/\\\\}"; esc="${esc//\"/\\\"}"
+      # id ve name JSON gövdesine güvenle gömülür (bkz. json_kacis)
       printf '{"id":"%s","name":"%s","installed":%s,"external":%s}' \
-        "${A_ID[i]}" "$esc" "$inst" "$ext"
+        "$(json_kacis "${A_ID[i]}")" "$(json_kacis "${A_NAME[i]}")" "$inst" "$ext"
     done
     printf ']}\n'
     ;;

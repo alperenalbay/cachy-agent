@@ -18,6 +18,9 @@ Agentic layer for KDE / CachyOS: a fast launcher menu, a dependency-checking ins
 - `alacritty`
 - `fish`
 - `mise`
+- `python-gobject` (`python3 -c 'import gi'`)
+- `journalctl` (systemd)
+- `kwriteconfig6` (kconfig)
 
 ## Installation
 
@@ -25,24 +28,32 @@ Agentic layer for KDE / CachyOS: a fast launcher menu, a dependency-checking ins
 ./install.sh
 ```
 
-The installer checks the requirements above, installs the menu scripts, writes `agents.conf` if it does not already exist, installs the plasmoid, and enables the crash watcher. **It does not register the global shortcut** — do that once by hand: System Settings › Keyboard › Shortcuts › cachyAgent › Launch.
+The installer checks the requirements above, installs the menu scripts, writes `agents.conf` if it does not already exist, installs the plasmoid, and enables the crash watcher plus the usage-refresh service and its timer. **It does not register the global shortcut** — do that once by hand: System Settings › Keyboard › Shortcuts › cachyAgent › Launch.
 
 ## Usage
 
 Open the agent menu (pick one):
 
-- Press the **global shortcut** (registered by `install.sh`), or
+- Press the **global shortcut** (registered by hand, see Installation), or
 - Click the **Plasma panel icon** / run the launcher entry, or
-- Press `a` in the terminal helper, or `ga` for the guided variant.
+- Run `cachy-agent-menu` in a terminal.
+
+In `fish`, the helper defines two aliases that start an agent **directly** (they do not open the menu):
+
+- `a` — the default agent (`cachy-agent --inline`)
+- `ga` — `agy` specifically (`cachy-agent --inline agy`)
 
 Examples:
 
 ```bash
-# open the agent menu
+# run the default agent directly
 a
 
-# agy (the second alias)
+# agy directly
 ga
+
+# open the agent menu
+cachy-agent-menu
 ```
 
 Crash flow:
@@ -61,7 +72,7 @@ Crash flow:
 ./uninstall.sh
 ```
 
-Removes the menu entries, shortcut, plasmoid, and crash watcher installed by `install.sh`.
+Removes the menu entries, plasmoid, and crash watcher installed by `install.sh`.
 
 ## Configuration
 

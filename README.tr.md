@@ -18,6 +18,9 @@ KDE / CachyOS için agentic katman: hızlı başlatıcı menüsü, bağımlılı
 - `alacritty`
 - `fish`
 - `mise`
+- `python-gobject` (`python3 -c 'import gi'`)
+- `journalctl` (systemd)
+- `kwriteconfig6` (kconfig)
 
 ## Kurulum
 
@@ -25,7 +28,7 @@ KDE / CachyOS için agentic katman: hızlı başlatıcı menüsü, bağımlılı
 ./install.sh
 ```
 
-Kurulum betiği gereksinimleri denetler, menü betiklerini kurar, `agents.conf` dosyası yoksa yazar, plasmoid'i kurar ve çökme izleyiciyi etkinleştirir. **Genel kısayolu kaydetmez** — bunu bir kez elle yapın: Sistem Ayarları › Klavye › Kısayollar › cachyAgent › Başlat.
+Kurulum betiği gereksinimleri denetler, menü betiklerini kurar, `agents.conf` dosyası yoksa yazar, plasmoid'i kurar, çökme izleyiciyi ve kullanım yenileme servisini (servis + zamanlayıcı) etkinleştirir. **Genel kısayolu kaydetmez** — bunu bir kez elle yapın: Sistem Ayarları › Klavye › Kısayollar › cachyAgent › Başlat.
 
 ## Kullanım
 
@@ -33,16 +36,24 @@ Agent menüsünü aç (birini seç):
 
 - **Genel kısayola** bas (yukarıdaki elle kayıt), veya
 - **Plasma panel simgesine** tıkla / başlatıcı girdisini çalıştır, veya
-- Terminalde `a` yaz.
+- Terminalde `cachy-agent-menu` yaz.
+
+`fish` için tanımlanan iki takma ad agent'ı **doğrudan** çalıştırır (menüyü açmaz):
+
+- `a` — varsayılan agent (`cachy-agent --inline`)
+- `ga` — yalnızca `agy` (`cachy-agent --inline agy`)
 
 Örnekler:
 
 ```bash
-# agent menüsünü aç
+# varsayılan agent'ı doğrudan çalıştır
 a
 
-# agy (ikinci takma ad)
+# agy'yi doğrudan çalıştır
 ga
+
+# agent menüsünü aç
+cachy-agent-menu
 ```
 
 Çökme akışı:
@@ -61,7 +72,7 @@ ga
 ./uninstall.sh
 ```
 
-`install.sh` ile kurulan menü girdilerini, kısayolu, plasmoid'i ve çökme izleyiciyi kaldırır.
+`install.sh` ile kurulan menü girdilerini, plasmoid'i ve çökme izleyiciyi kaldırır.
 
 ## Yapılandırma
 

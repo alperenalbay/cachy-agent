@@ -99,6 +99,23 @@ jobs:
       - name: smoke
         run: ./tests/smoke.sh
 
+      # tr_TR.UTF-8 ÜRETİLİR (seçilmez).
+      #
+      # Neden: test 16/16b/16c/16d `locale -a | grep tr_TR` ile koşullu —
+      # ubuntu-latest'te tr_TR.UTF-8 ÜRETİLMEDİĞİ için bu dört test CI'da
+      # sessizce SKIP oluyordu. Dalın TAMAMEN sebebi olan düzeltme
+      # (config parser'da collation sabitleme, e009399) böylece CI'da hiç
+      # ölçülmüyordu: regresyon koruması devre dışıydı.
+      #
+      # Üretmek yeterli — LANG/LC_ALL yine C.UTF-8'de kalıyor (shellcheck
+      # çıktısının bozulmaması için yukarıdaki gerekçe geçerli). Testler
+      # kendi ortamını kendi ayarlıyor.
+      - name: tr_TR.UTF-8 uret (locale testleri icin)
+        run: |
+          sudo locale-gen tr_TR.UTF-8
+          locale -a | grep -qi '^tr_TR\.utf-\?8$' \
+            || { echo "tr_TR.UTF-8 uretilemedi"; exit 1; }
+
       - name: test
         run: ./tests/test.sh
 
