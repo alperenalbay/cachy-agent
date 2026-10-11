@@ -433,7 +433,7 @@ export CACHY_AGENT_CONFIG="$REPO/tests/fixtures/agents-valid.conf"
 
 # 10a. "+ x (kur)" -> install çağrısı
 : > "$STUB_LOG"
-FAKE_SEL="+ codex (kur)" bash "$STUB/menu-test" >/dev/null 2>&1 || true
+FAKE_SEL="+ Codex (kur)" bash "$STUB/menu-test" >/dev/null 2>&1 || true
 if grep -q "cachy-agent-install" "$STUB_LOG" && grep -q "codex" "$STUB_LOG"; then ok "10a menu '+ x (kur)' install'e gider"; else bad "10a menu '+ x (kur)'" "log: $(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
 
 # 10b. ayraç satırı -> HİÇBİR komut çağrılmaz, menüde kalınır (Esc ile çıkılır)
@@ -488,12 +488,12 @@ else bad "10n menü ✓ işareti" "menu='$(printf '%s' "$_menu_n" | tr '\n' '/')
 # (Esc 2.'den 1.'e döner). Şu anki varsayılan "✓ x (şu anki)" olarak, diğerleri
 # "(varsayılan yap)" ile görünmeli.
 : > "$STUB_LOG"; rm -f "$STUB_MENU_N" "$STUB_MENU".*
-printf '%s\n%s\n' '⟲ Varsayılanı değiştir' '  claude (varsayılan yap)' > "$STUB_SEL_LIST"
+printf '%s\n%s\n' '⟲ Varsayılanı değiştir' '  Claude Code (varsayılan yap)' > "$STUB_SEL_LIST"
 FAKE_DEFAULT=agy FAKE_SEL_LIST="$STUB_SEL_LIST" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
 if [[ $rc -eq 0 ]] \
    && grep -q 'DEFAULT CALLED: default claude' "$STUB_LOG" \
    && grep -qx '✓ agy (şu anki)' "$STUB_MENU.2" \
-   && grep -qx '  claude (varsayılan yap)' "$STUB_MENU.2"; then
+   && grep -qx '  Claude Code (varsayılan yap)' "$STUB_MENU.2"; then
   ok "10o 'varsayılanı değiştir' ikinci ekranı açar ve seçimi yazar"
 else bad "10o iki ekranlı akış" "exit=$rc ekran2='$(tr '\n' '/' < "$STUB_MENU.2" 2>/dev/null)' log=$(cat "$STUB_LOG" 2>/dev/null || echo BOŞ)"; fi
 
@@ -557,14 +557,14 @@ WORKDIR=~/Projeler
 ozel=Özel Ajansı|npm i -g ozel|--yolo|--prompt|ozel login
 EOF
 : > "$STUB_LOG"; : > "$STUB_MENU"
-CACHY_AGENT_CONFIG="$STUB/ozel.conf" FAKE_SEL="+ ozel (kur)" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
+CACHY_AGENT_CONFIG="$STUB/ozel.conf" FAKE_SEL="+ Özel Ajansı (kur)" bash "$STUB/menu-test" >/dev/null 2>&1; rc=$?
 menu_txt="$(cat "$STUB_MENU" 2>/dev/null || echo BOŞ)"
 g_sabit_yok=1
 for a in opencode agy claude codex crush copilot cursor-agent grok; do
   if grep -q "$a" "$STUB_MENU" 2>/dev/null; then g_sabit_yok=0; fi
 done
 if [[ $rc == 0 ]] \
-   && grep -qx '+ ozel (kur)' "$STUB_MENU" \
+   && grep -qx '+ Özel Ajansı (kur)' "$STUB_MENU" \
    && [[ $g_sabit_yok -eq 1 ]] \
    && grep -q 'cachy-agent-install' "$STUB_LOG" \
    && grep -qx 'ozel' "$STUB_LOG"; then
@@ -710,7 +710,7 @@ FAKE_SEL="claude" PATH="$STUB:$SYSBIN" CACHY_AGENT_CONFIG="$REPO/tests/fixtures/
   bash "$STUB/menu-test" >/dev/null 2>&1; m_rc=$?
 menu_m="$(cat "$STUB_MENU" 2>/dev/null)"
 if [[ $m_rc -eq 0 ]] \
-   && grep -qE '^[[:space:]]*claude$' "$STUB_MENU" \
+   && grep -qE '^[[:space:]]*Claude Code$' "$STUB_MENU" \
    && ! grep -q '^+ claude (kur)$' "$STUB_MENU" \
    && grep -q 'cachy-agent-open' "$STUB_LOG" \
    && grep -qx 'claude' "$STUB_LOG"; then
@@ -718,12 +718,31 @@ if [[ $m_rc -eq 0 ]] \
 else
   bad "10m menu kurulu/missing ayrimi" "rc=$m_rc menu='$(printf '%s' "$menu_m" | tr '\n' '/')' log=$(cat "$STUB_LOG" 2>/dev/null | tr '\n' ' ')"
 fi
+
+# 10r. Menü config'teki GÖRÜNEN ADI gösterir; seçilince ID ile açılır.
+# Kullanıcı isteği: menüde 'opencode' yerine 'OpenChamber' görünsün. İD
+# değişmiyor (kullanım toplayıcı + argv ölçümü id'e bağlı), yalnız ETİKET.
+# Bu test iki şeyi birden kilitler: listede 'Claude Code' var (görünen ad),
+# `claude` id'si yok; ve seçilince argv'de `claude` geçiyor (id).
+# FAKE_SEL menü satırının BİREBİR kendisidir; fuzzel listeyi birebir döndürür,
+# yani baştaki hizalama boşlukları da seçimde yer alır.
+: > "$STUB_LOG"; : > "$STUB_MENU"
+FAKE_DEFAULT=agy FAKE_SEL="  Claude Code" PATH="$STUB:$SYSBIN" \
+  CACHY_AGENT_CONFIG="$REPO/tests/fixtures/agents-valid.conf" \
+  bash "$STUB/menu-test" >/dev/null 2>&1; r_rc=$?
+if [[ $r_rc -eq 0 ]] \
+   && grep -qx '  Claude Code' "$STUB_MENU" \
+   && ! grep -q 'claude' "$STUB_MENU" \
+   && grep -q 'cachy-agent-open' "$STUB_LOG" && grep -qx 'claude' "$STUB_LOG"; then
+  ok "10r menu gorsen adi gosterir, id ile acar"
+else bad "10r gorsen ad" "rc=$r_rc menu='$(tr '\n' '/' < "$STUB_MENU")' log=$(tr '\n' ' ' < "$STUB_LOG")"; fi
+
 # Ters yön: PATH'te OLMAYAN ajan gerçekten "kur" listesine düşmeli. Bu ikili
 # ayrımın YAN yüzünü sabitler; yalnız (a)/(b) bir yönü ölçüyordu.
-if grep -qx '+ codex (kur)' "$STUB_MENU"; then
+if grep -qx '+ Codex (kur)' "$STUB_MENU"; then
   ok "10m-2 menu eksik ajani (codex) 'kur' satiri olarak listeler"
 else
-  bad "10m-2 menu eksik ajan" "'+ codex (kur)' satirinda yok"
+  bad "10m-2 menu eksik ajan" "'+ Codex (kur)' satirinda yok"
 fi
 
 unset CACHY_AGENT_CONFIG
@@ -815,7 +834,19 @@ if "$AG" json 2>/dev/null | python3 -c 'import json,sys; json.load(sys.stdin)' 2
   ok "11tab json kontrol karakterinde gecerli"
 else
   bad "11tab json kontrol karakteri kacisi" "cikti parse edilemedi (TAB islenmedi)"
+
+
 fi
+
+# 11pairs. `pairs` -> "id<TAB>görünen_ad" (menü id YERİNE görünen adı gösterecek;
+# çalıştırma/kurulum komutları ise id ile çalışır). İki alanı ayırmak için
+# ayraç TAB: config'te alan ayracı '|' ve id'lerde TAB bulunmaz.
+export CACHY_AGENT_CONFIG="$FIX/agents-valid.conf"   # 11tab TAB fixture'ini birakmis olabilir
+_pairs=$("$AG" pairs 2>/dev/null)
+if printf '%s\n' "$_pairs" | grep -qx "$(printf 'claude\tClaude Code')" \
+   && printf '%s\n' "$_pairs" | grep -qx "$(printf 'opencode\topencode')"; then
+  ok "11pairs id<TAB>görünen_ad"
+else bad "11pairs" "out=$(printf '%s' "$_pairs" | tr '\n' '/')"; fi
 
 # 11g: bilinmeyen id -> get exit 1, stdout bos, stderr mesaj
 export CACHY_AGENT_CONFIG="$FIX/agents-valid.conf"

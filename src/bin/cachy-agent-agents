@@ -51,7 +51,7 @@ WORKDIR=""; WORKDIR_LINE=0; WORKDIR_COUNT=0
 die()  { printf '%s: %s\n' "$PROG" "$1" >&2; exit 1; }
 perr() { printf '%s: %s:%s: %s\n' "$PROG" "$CONF" "$1" "$2" >&2; }
 usage() {
-  printf 'kullanım: %s list|ids|get <id> <name|install|flags|prompt_flag|login>|flags <id>|known <id>|installed|external|workdir|json|check\n' "$PROG" >&2
+  printf 'kullanım: %s list|pairs|ids|get <id> <name|install|flags|prompt_flag|login>|flags <id>|known <id>|installed|external|workdir|json|check\n' "$PROG" >&2
   exit 2
 }
 unknown_id() { printf '%s: bilinmeyen agent: %s\n' "$PROG" "$1" >&2; exit 1; }
@@ -277,7 +277,7 @@ cmd=${1:-}; [[ $# -gt 0 ]] && shift || true
 # sorgu "config eksik/bozuk" sanılmamalı, exit 2 dönmeli (spec §5.2).
 # Altı görev bu kodlara göre dallanıyor; 1 ile 2 karışmamalı.
 case "$cmd" in
-  list|ids|installed|external|workdir|json|check) [[ $# -eq 0 ]] || usage ;;
+  list|pairs|ids|installed|external|workdir|json|check) [[ $# -eq 0 ]] || usage ;;
   get)                 [[ $# -eq 2 ]] || usage ;;
   flags|known)         [[ $# -eq 1 ]] || usage ;;
   "")                  usage ;;
@@ -313,6 +313,12 @@ json_kacis() {
 case "$cmd" in
   list)
     for (( i=0; i<${#A_ID[@]}; i++ )); do printf '%s\n' "${A_ID[i]}"; done
+    ;;
+  # pairs: "id<TAB>görünen_ad" — menü id YERİNE görünen adı göstermek için.
+  # Ayrac TAB: config alan ayracı '|', id'lerde TAB bulunmaz. Menü seçimi
+  # yine ID'ye geri çevirir; çalıştırma/kurulum komutları id ile çağrılır.
+  pairs)
+    for (( i=0; i<${#A_ID[@]}; i++ )); do printf '%s\t%s\n' "${A_ID[i]}" "${A_NAME[i]}"; done
     ;;
 
   ids)
